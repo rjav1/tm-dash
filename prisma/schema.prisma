@@ -643,3 +643,79 @@ model Ticket {
   @@index([status])
   @@map("tickets")
 }
+
+// ========================================
+// Generator Jobs - Remote account generation
+// ========================================
+
+model GeneratorJob {
+  id           String    @id @default(cuid())
+  status       String    @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
+  threadCount  Int       @default(1) @map("thread_count")
+
+  // Progress tracking
+  totalTasks   Int       @default(0) @map("total_tasks")
+  completed    Int       @default(0)
+  succeeded    Int       @default(0)
+  failed       Int       @default(0)
+
+  // Worker info
+  workerId     String?   @map("worker_id") // Which VPS claimed this
+  startedAt    DateTime? @map("started_at")
+  completedAt  DateTime? @map("completed_at")
+
+  // Timestamps
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  tasks        GeneratorTask[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("generator_jobs")
+}
+
+model GeneratorTask {
+  id           String    @id @default(cuid())
+  jobId        String    @map("job_id")
+
+  // Input
+  email        String
+  imapSource   String    @map("imap_source") // "aycd" or gmail address
+  proxy        String?
+
+  // Status
+  status       String    @default("PENDING") // PENDING, RUNNING, SUCCESS, FAILED
+  errorMessage String?   @map("error_message")
+
+  // Output (on success)
+  password     String?
+  phoneNumber  String?   @map("phone_number")
+  firstName    String?   @map("first_name")
+  lastName     String?   @map("last_name")
+  postalCode   String?   @map("postal_code")
+
+  // Timing
+  startedAt    DateTime? @map("started_at")
+  completedAt  DateTime? @map("completed_at")
+
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  job          GeneratorJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([status])
+  @@map("generator_tasks")
+}
+
+model GeneratorConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   // JSON string for complex values
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("generator_config")
+}

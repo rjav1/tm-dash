@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Package,
   Receipt,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +29,7 @@ const navigation = [
   { name: "Sales", href: "/sales", icon: Receipt },
   { name: "Error Analysis", href: "/analytics", icon: AlertTriangle },
   { name: "Import Data", href: "/import", icon: Upload },
+  { name: "Generator", href: "/generator", icon: Zap },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 
