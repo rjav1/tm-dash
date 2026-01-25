@@ -1,0 +1,645 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ========================================
+// Enums
+// ========================================
+
+enum AccountStatus {
+  ACTIVE
+  BANNED
+  SUSPENDED
+  INACTIVE
+  PENDING
+}
+
+enum ProxyType {
+  RESIDENTIAL
+  DATACENTER
+  MOBILE
+  ISP
+}
+
+enum ProxyStatus {
+  ACTIVE
+  DEAD
+  SLOW
+  UNKNOWN
+}
+
+enum PurchaseStatus {
+  SUCCESS
+  FAILED
+  NEEDS_REVIEW
+}
+
+enum TicketStatus {
+  PURCHASED
+  LISTED
+  SOLD
+  CANCELLED
+}
+
+// ========================================
+// IMAP Credentials - Store IMAP provider login info
+// ========================================
+
+model ImapCredential {
+  id        String   @id @default(cuid())
+  email     String   @unique // e.g., hoangconghai1602@gmail.com
+  password  String   // App password
+  provider  String   // "gmail", "outlook", "aycd", etc.
+  isEnabled Boolean  @default(true) @map("is_enabled")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations - accounts using this IMAP credential
+  accounts Account[]
+
+  @@map("imap_credentials")
+}
+
+// ========================================
+// Core Tables
+// ========================================
+
+model Account {
+  id               String        @id @default(cuid())
+  email            String        @unique
+  password         String?
+  phoneNumber      String?       @map("phone_number")
+  imapProvider     String?       @map("imap_provider") // Legacy field for "aycd", "gmail" reference
+  status           AccountStatus @default(ACTIVE)
+  notes            String?
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  // POS/TicketVault account import metadata
+  posAccountId        Int?       @unique @map("pos_account_id") // TicketVault CompanySeasonSiteID from purchase/account
+  posImportedAt       DateTime?  @map("pos_imported_at")        // When account was imported to POS
+  
+  // POS/TicketVault sync metadata (from season sites)
+  posSeasonSiteId     Int?       @map("pos_season_site_id")    // TicketVault CompanySeasonSiteID from settings
+  posLastCheckedAt    DateTime?  @map("pos_last_checked_at")   // When TV last synced this account
+  posSyncStatus       String?    @map("pos_sync_status")       // "Completed", "Error", "Processing"
+  posLastError        String?    @map("pos_last_error")        // Last sync error message
+  posTicketsFound     Int?       @map("pos_tickets_found")     // Tickets found in last sync
+  posTicketsUpdated   Int?       @map("pos_tickets_updated")   // Tickets updated in last sync
+
+  // Proxy relationships
+  creationProxyId  String?       @map("creation_proxy_id")
+  runtimeProxyId   String?       @map("runtime_proxy_id")
+  
+  // IMAP credential relationship
+  imapCredentialId String?       @map("imap_credential_id")
+
+  // Relations
+  cards            Card[]          // One account can have multiple cards
+  queuePositions   QueuePosition[]
+  purchases        Purchase[]
+  proxies          AccountProxy[]  // Legacy many-to-many relation
+  creationProxy    Proxy?          @relation("CreationProxy", fields: [creationProxyId], references: [id], onDelete: SetNull)
+  runtimeProxy     Proxy?          @relation("RuntimeProxy", fields: [runtimeProxyId], references: [id], onDelete: SetNull)
+  imapCredential   ImapCredential? @relation(fields: [imapCredentialId], references: [id], onDelete: SetNull)
+
+  @@index([creationProxyId])
+  @@index([runtimeProxyId])
+  @@index([imapCredentialId])
+  @@map("accounts")
+}
+
+model Card {
+  id             String    @id @default(cuid())
+  accountId      String?   @map("account_id") // Optional - unlinked cards have null, not unique (many cards per account)
+  profileName    String    @unique @map("profile_name") // Required and unique
+  cardType       String    @map("card_type") // Visa, Mastercard, etc.
+  cardNumber     String    @unique @map("card_number") // Unique card number
+  expMonth       String    @map("exp_month")
+  expYear        String    @map("exp_year")
+  cvv            String
+  billingName    String    @map("billing_name")
+  billingPhone   String?   @map("billing_phone")
+  billingAddress String    @map("billing_address")
+  billingZip     String    @map("billing_zip")
+  billingCity    String    @map("billing_city")
+  billingState   String    @map("billing_state")
+  deletedAt      DateTime? @map("deleted_at") // Soft delete - null means active
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  account   Account?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  purchases Purchase[]
+
+  @@index([accountId])
+  @@map("cards")
+}
+
+model Proxy {
+  id          String      @id @default(cuid())
+  proxyString String      @unique @map("proxy_string") // ip:port:user:pass format
+  type        ProxyType   @default(RESIDENTIAL)
+  provider    String?     // e.g., "proxies" from the proxy string
+  status      ProxyStatus @default(UNKNOWN)
+  lastChecked DateTime?   @map("last_checked")
+  notes       String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  accounts        AccountProxy[]   // Legacy many-to-many
+  createdAccounts Account[]        @relation("CreationProxy")
+  runtimeAccounts Account[]        @relation("RuntimeProxy")
+
+  @@map("proxies")
+}
+
+model AccountProxy {
+  id         String   @id @default(cuid())
+  accountId  String   @map("account_id")
+  proxyId    String   @map("proxy_id")
+  assignedAt DateTime @default(now()) @map("assigned_at")
+  isActive   Boolean  @default(true) @map("is_active")
+  usageType  String?  @map("usage_type") // "creation", "runtime", "both"
+
+  // Relations
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  proxy   Proxy   @relation(fields: [proxyId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, proxyId])
+  @@map("account_proxies")
+}
+
+model Event {
+  id           String    @id @default(cuid())
+  tmEventId    String    @unique @map("tm_event_id") // Ticketmaster event ID or generated hash
+  artistName   String?   @map("artist_name") // Artist/performer name
+  eventName    String    @map("event_name") // Show/tour name
+  venue        String?
+  venueId      String?   @map("venue_id") // Vivid Seats venue ID for linking to VenueMap
+  eventDate    DateTime? @map("event_date")
+  dayOfWeek    String?   @map("day_of_week") // "Mon", "Tue", "Wed", etc.
+  eventDateRaw String?   @map("event_date_raw") // Original date string from source
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  
+  // Get-in price from secondary market
+  getInPrice          Decimal?  @map("get_in_price") @db.Decimal(10, 2)
+  getInPriceUrl       String?   @map("get_in_price_url")
+  getInPriceSource    String?   @map("get_in_price_source") // "vividseats", "stubhub"
+  getInPriceUpdatedAt DateTime? @map("get_in_price_updated_at")
+  
+  // POS/TicketVault linking
+  posProductionId     Int?      @unique @map("pos_production_id") // TicketVault ProductionID
+  posVenueId          Int?      @map("pos_venue_id")              // TicketVault VenueID
+
+  // Relations
+  queuePositions QueuePosition[]
+  purchases      Purchase[]
+  tickets        Ticket[]
+  listings       Listing[]
+  sales          Sale[]
+  zonePrices     EventZonePrice[]
+
+  @@index([eventName])
+  @@index([artistName])
+  @@index([venueId])
+  @@index([posProductionId])
+  @@map("events")
+}
+
+model EventZonePrice {
+  id        String   @id @default(cuid())
+  eventId   String   @map("event_id")
+  zoneName  String   @map("zone_name") // "Floor Seating", "Lower Level", "Upper Level", "Club Level"
+  minPrice  Decimal  @map("min_price") @db.Decimal(10, 2)
+  scrapedAt DateTime @map("scraped_at")
+  colorHex  String?  @map("color_hex") // Zone color from Vivid Seats
+
+  // Relations
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, zoneName])
+  @@index([eventId])
+  @@map("event_zone_prices")
+}
+
+// ========================================
+// Venue Maps & Zone Mappings
+// ========================================
+
+model VenueMap {
+  id            String   @id @default(cuid())
+  venueId       String   @unique @map("venue_id") // Vivid Seats venue ID (e.g., "737")
+  venueName     String   @map("venue_name")
+  staticMapUrl  String?  @map("static_map_url")
+  svgFileName   String?  @map("svg_file_name")
+  jsonFileName  String?  @map("json_file_name")
+  scrapedAt     DateTime @map("scraped_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  zones VenueZone[]
+
+  @@map("venue_maps")
+}
+
+model VenueZone {
+  id           String   @id @default(cuid())
+  venueMapId   String   @map("venue_map_id")
+  zoneName     String   @map("zone_name")
+  colorHex     String?  @map("color_hex")
+  displayOrder Int?     @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  venueMap VenueMap           @relation(fields: [venueMapId], references: [id], onDelete: Cascade)
+  sections VenueSectionZone[]
+
+  @@unique([venueMapId, zoneName])
+  @@index([venueMapId])
+  @@map("venue_zones")
+}
+
+model VenueSectionZone {
+  id          String   @id @default(cuid())
+  venueZoneId String   @map("venue_zone_id")
+  sectionName String   @map("section_name") // e.g., "Promenade V1"
+  minPrice    Decimal? @map("min_price") @db.Decimal(10, 2) // Section-specific min price
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  venueZone VenueZone @relation(fields: [venueZoneId], references: [id], onDelete: Cascade)
+
+  @@unique([venueZoneId, sectionName])
+  @@index([sectionName])
+  @@index([venueZoneId])
+  @@map("venue_section_zones")
+}
+
+model QueuePosition {
+  id        String   @id @default(cuid())
+  accountId String   @map("account_id")
+  eventId   String   @map("event_id")
+  position  Int      // Queue position number
+  testedAt  DateTime @default(now()) @map("tested_at")
+  source    String?  // Which encore run, batch identifier, etc.
+  notes     String?
+  
+  // Calculated fields (stored for performance)
+  percentile        Int?    // Percentile ranking (0-100), calculated when imported
+  totalParticipants Int?    @map("total_participants") // Total participants at time of calculation
+  
+  // Exclusion fields for outlier filtering
+  excluded       Boolean   @default(false) // If true, don't include in calculations
+  excludedAt     DateTime? @map("excluded_at") // When it was excluded
+  excludedReason String?   @map("excluded_reason") // Why it was excluded (e.g., "late entry", "outlier")
+
+  // Relations
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  // Unique constraint for deduplication - one position per account per event
+  @@unique([accountId, eventId])
+  @@index([accountId])
+  @@index([eventId])
+  @@index([testedAt])
+  @@index([excluded])
+  @@map("queue_positions")
+}
+
+model Purchase {
+  id              String         @id @default(cuid())
+  accountId       String         @map("account_id")
+  eventId         String?        @map("event_id")
+  cardId          String?        @map("card_id")
+
+  // Job details from tm-checkout
+  externalJobId   String?        @unique @map("external_job_id")
+  tmOrderNumber   String?        @unique @map("tm_order_number") // Ticketmaster order number for deduplication
+  status          PurchaseStatus
+  errorCode       String?        @map("error_code")
+  errorMessage    String?        @map("error_message")
+
+  // Card info from import (for re-linking purposes)
+  cardLast4       String?        @map("card_last_4")
+
+  // Ticket details
+  quantity        Int            @default(1)
+  priceEach       Decimal?       @map("price_each") @db.Decimal(10, 2)
+  totalPrice      Decimal?       @map("total_price") @db.Decimal(10, 2)
+  section         String?
+  row             String?
+  seats           String?        // e.g., "12-17" or "5,6,7"
+
+  // Price comparison override (for profit calculations)
+  priceOverrideType  String?   @map("price_override_type")  // "get_in", "zone", "manual"
+  priceOverrideZone  String?   @map("price_override_zone")  // Zone name if using zone price
+  priceOverrideValue Decimal?  @map("price_override_value") @db.Decimal(10, 2) // Manual price
+
+  // Dashboard PO tracking
+  dashboardPoNumber  String?   @unique @map("dashboard_po_number") // 6-digit: "000001"
+
+  // TicketVault POS sync fields
+  posSyncedAt        DateTime? @map("pos_synced_at")
+  posTicketGroupId   Int?      @map("pos_ticket_group_id")
+  posPurchaseOrderId Int?      @map("pos_purchase_order_id")
+  posEventId         Int?      @map("pos_event_id")
+
+  // URLs
+  checkoutUrl     String?        @map("checkout_url")
+  confirmationUrl String?        @map("confirmation_url")
+
+  // Timestamps
+  createdAt       DateTime       @default(now()) @map("created_at")
+  startedAt       DateTime?      @map("started_at")
+  completedAt     DateTime?      @map("completed_at")
+  attemptCount    Int            @default(1) @map("attempt_count")
+
+  // Relations
+  account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  event    Event?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  card     Card?     @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  listings Listing[] // POS listings linked to this purchase
+  tickets  Ticket[]  // Individual tickets from this purchase
+
+  @@index([accountId])
+  @@index([eventId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([errorCode])
+  @@map("purchases")
+}
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique // e.g., "marketplace_fee_percentage"
+  value     String   // Store as string, parse as needed
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("settings")
+}
+
+// ========================================
+// POS Listings - Cached from TicketVault
+// ========================================
+
+model Listing {
+  id                 String    @id @default(cuid())
+  
+  // TicketVault IDs
+  ticketGroupId      Int       @unique @map("ticket_group_id")
+  purchaseOrderId    Int?      @map("purchase_order_id")
+  
+  // Event info
+  eventName          String    @map("event_name")
+  venueName          String?   @map("venue_name")
+  venueCity          String?   @map("venue_city")
+  eventDateTime      DateTime? @map("event_date_time")
+  
+  // Ticket details
+  section            String
+  row                String
+  startSeat          Int       @map("start_seat")
+  endSeat            Int       @map("end_seat")
+  quantity           Int
+  
+  // Pricing
+  cost               Decimal   @map("cost") @db.Decimal(10, 2)
+  price              Decimal   @map("price") @db.Decimal(10, 2)
+  
+  // Account info
+  accountEmail       String?   @map("account_email")
+  internalNote       String?   @map("internal_note")
+  extPONumber        String?   @map("ext_po_number")
+  
+  // Match status
+  isMatched          Boolean   @default(false) @map("is_matched")
+  barcodesCount      Int       @default(0) @map("barcodes_count")
+  pdfsCount          Int       @default(0) @map("pdfs_count")
+  linksCount         Int       @default(0) @map("links_count")
+  pdfStatus          String?   @map("pdf_status")
+  
+  // Listing status
+  statusTypeId       Int?      @map("status_type_id")
+  poVendor           String?   @map("po_vendor")
+  
+  // Marketplace IDs (for links)
+  vividEventId       Int?      @map("vivid_event_id")
+  stubhubEventId     Int?      @map("stubhub_event_id")
+  seatgeekEventId    Int?      @map("seatgeek_event_id")
+  tmEventId          String?   @map("tm_event_id")
+  productionId       Int?      @map("production_id")
+  
+  // Sync tracking
+  lastSyncedAt       DateTime  @map("last_synced_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  
+  // Link to our Purchase if exists (by extPONumber match)
+  purchaseId         String?   @map("purchase_id")
+  purchase           Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  
+  // Link to normalized Event
+  eventId            String?   @map("event_id")
+  event              Event?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  
+  // Sales from this listing
+  sales              Sale[]
+  
+  // Individual tickets in this listing
+  tickets            Ticket[]
+  
+  @@index([accountEmail])
+  @@index([extPONumber])
+  @@index([isMatched])
+  @@index([eventDateTime])
+  @@index([purchaseId])
+  @@index([eventId])
+  @@map("listings")
+}
+
+// ========================================
+// Sales & Invoices - From TicketVault
+// ========================================
+
+model Sale {
+  id                String    @id @default(cuid())
+  
+  // TicketVault IDs
+  ticketGroupId     Int       @map("ticket_group_id")      // Links to Listing
+  invoiceNumber     Int?      @map("invoice_number")       // Links to Invoice
+  orderId           Int?      @map("order_id")             // TV Order ID
+  
+  // Event info (denormalized for display)
+  eventName         String?   @map("event_name")
+  eventDateTime     DateTime? @map("event_date_time")
+  venueName         String?   @map("venue_name")
+  
+  // Ticket details
+  section           String?
+  row               String?
+  seats             String?                                 // e.g., "1-2" or "5,6"
+  quantity          Int                                     // Tickets sold in this sale
+  
+  // Pricing
+  salePrice         Decimal   @map("sale_price") @db.Decimal(10, 2)
+  cost              Decimal?  @map("cost") @db.Decimal(10, 2)
+  
+  // Buyer info
+  buyerEmail        String?   @map("buyer_email")
+  buyerName         String?   @map("buyer_name")
+  
+  // Status (from salesQueue Status field)
+  status            Int       @default(0)                   // 20=Pending, 40=Complete, etc.
+  statusName        String?   @map("status_name")
+  deliveryType      String?   @map("delivery_type")
+  transferType      String?   @map("transfer_type")
+  
+  // Fulfillment tracking
+  isComplete        Boolean   @default(false) @map("is_complete")
+  needsShipping     Boolean   @default(false) @map("needs_shipping")
+  mobileInfoNeeded  Boolean   @default(false) @map("mobile_info_needed")
+  pdfBcMissing      Boolean   @default(false) @map("pdf_bc_missing")
+  
+  // External order number (marketplace order)
+  extOrderNumber    String?   @map("ext_order_number")
+  
+  // Our PO number (from TicketVault ExtPONumber field)
+  extPONumber       String?   @map("ext_po_number")
+  
+  // Timestamps
+  saleDate          DateTime? @map("sale_date")
+  lastSyncedAt      DateTime  @map("last_synced_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  listingId         String?   @map("listing_id")
+  listing           Listing?  @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  invoice           Invoice?  @relation(fields: [invoiceNumber], references: [invoiceNumber])
+  
+  // Link to normalized Event
+  eventId           String?   @map("event_id")
+  event             Event?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  
+  // Individual tickets sold in this sale
+  tickets           Ticket[]
+  
+  @@unique([ticketGroupId, orderId])
+  @@index([listingId])
+  @@index([invoiceNumber])
+  @@index([status])
+  @@index([saleDate])
+  @@index([eventId])
+  @@map("sales")
+}
+
+model Invoice {
+  id                String    @id @default(cuid())
+  
+  // TicketVault IDs
+  invoiceNumber     Int       @unique @map("invoice_number")
+  clientId          Int?      @map("client_id")
+  
+  // Client/Buyer info
+  clientName        String?   @map("client_name")
+  clientEmail       String?   @map("client_email")
+  
+  // Event info (denormalized from first sale)
+  eventName         String?   @map("event_name")
+  eventDateTime     DateTime? @map("event_date_time")
+  
+  // Ticket summary
+  totalQuantity     Int       @default(0) @map("total_quantity")
+  
+  // Financials
+  totalAmount       Decimal   @map("total_amount") @db.Decimal(10, 2)
+  fees              Decimal   @default(0) @map("fees") @db.Decimal(10, 2)
+  totalCost         Decimal   @default(0) @map("total_cost") @db.Decimal(10, 2)
+  
+  // Payment/Payout status
+  isPaid            Boolean   @default(false) @map("is_paid")
+  payoutStatus      String?   @map("payout_status")         // "Pending", "Paid", etc.
+  remittanceStatus  String?   @map("remittance_status")
+  remittanceDate    DateTime? @map("remittance_date")
+  
+  // Status
+  isCancelled       Boolean   @default(false) @map("is_cancelled")
+  
+  // External PO Number (links to our purchase)
+  extPONumber       String?   @map("ext_po_number")
+  
+  // Timestamps
+  invoiceDate       DateTime? @map("invoice_date")
+  lastSyncedAt      DateTime  @map("last_synced_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  sales             Sale[]
+  
+  @@index([isPaid])
+  @@index([payoutStatus])
+  @@index([invoiceDate])
+  @@index([extPONumber])
+  @@map("invoices")
+}
+
+// ========================================
+// Tickets - Individual seat tracking
+// ========================================
+
+model Ticket {
+  id              String       @id @default(cuid())
+  
+  // Links to parent records
+  purchaseId      String       @map("purchase_id")
+  eventId         String       @map("event_id")
+  
+  // Seat identity (unique per event)
+  section         String
+  row             String
+  seatNumber      Int          @map("seat_number")
+  
+  // Cost (from purchase, per ticket)
+  cost            Decimal      @db.Decimal(10, 2)
+  
+  // Lifecycle tracking
+  listingId       String?      @map("listing_id")   // Set when listed on POS
+  saleId          String?      @map("sale_id")      // Set when sold
+  
+  // Status
+  status          TicketStatus @default(PURCHASED)
+  
+  // Timestamps
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  
+  // Relations
+  purchase        Purchase     @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  event           Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  listing         Listing?     @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  sale            Sale?        @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  
+  @@unique([eventId, section, row, seatNumber])
+  @@index([purchaseId])
+  @@index([eventId])
+  @@index([listingId])
+  @@index([saleId])
+  @@index([status])
+  @@map("tickets")
+}
