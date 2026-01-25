@@ -7,13 +7,17 @@ import { Prisma } from "@prisma/client";
  * Fetch paginated list of card profiles with filtering and sorting
  * 
  * Query Parameters:
- * - search: Filter by profile name, billing name, card number, or linked account email
+ * - search: Filter by profile name, billing name, card number, street, city, or linked account email
  * - linked: Filter by linkage status ("true" = linked, "false" = unlinked)
  * - checkoutStatus: Filter by checkout status (AVAILABLE, IN_USE, DECLINED, EXHAUSTED)
+ * - cardType: Filter by card type (Visa, Mastercard, Amex, Discover)
+ * - state: Filter by billing state (2-letter code)
+ * - hasPurchases: Filter by purchase history ("true" = has purchases, "false" = no purchases)
+ * - expiry: Filter by expiry status ("expired", "expiring_soon", "valid")
  * - includeDeleted: Include soft-deleted cards ("true" to include)
  * - page: Page number (default: 1)
  * - limit: Items per page (default: 50, max: 100)
- * - sortBy: Sort field (profileName, cardType, billingName, createdAt, expYear, useCount, lastUsedAt)
+ * - sortBy: Sort field (profileName, cardType, createdAt, checkoutStatus, purchaseCount, useCount, lastUsedAt)
  * - sortOrder: Sort direction (asc, desc)
  * 
  * Response:
@@ -27,6 +31,10 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search") || "";
     const linked = searchParams.get("linked"); // "true", "false", or null for all
     const checkoutStatus = searchParams.get("checkoutStatus"); // AVAILABLE, IN_USE, DECLINED, EXHAUSTED
+    const cardType = searchParams.get("cardType"); // Visa, Mastercard, Amex, Discover
+    const state = searchParams.get("state"); // 2-letter state code
+    const hasPurchases = searchParams.get("hasPurchases"); // "true", "false"
+    const expiry = searchParams.get("expiry"); // "expired", "expiring_soon", "valid"
     const includeDeleted = searchParams.get("includeDeleted") === "true"; // Show soft-deleted cards
     const sortBy = searchParams.get("sortBy") || "createdAt";
     const sortOrder = searchParams.get("sortOrder") || "desc";
@@ -54,18 +62,118 @@ export async function GET(request: NextRequest) {
       where.checkoutStatus = checkoutStatus;
     }
 
-    // Search
+    // Filter by card type
+    if (cardType) {
+      where.cardType = { equals: cardType, mode: "insensitive" };
+    }
+
+    // Filter by state
+    if (state) {
+      where.billingState = { equals: state, mode: "insensitive" };
+    }
+
+    // Filter by expiry
+    if (expiry) {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1; // 1-12
+      
+      // Calculate 3 months from now
+      const threeMonthsFromNow = new Date(now);
+      threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
+      const futureYear = threeMonthsFromNow.getFullYear();
+      const futureMonth = threeMonthsFromNow.getMonth() + 1;
+
+      if (expiry === "expired") {
+        // Card is expired if expYear < currentYear OR (expYear == currentYear AND expMonth < currentMonth)
+        where.OR = [
+          { expYear: { lt: String(currentYear) } },
+          { 
+            AND: [
+              { expYear: String(currentYear) },
+              { expMonth: { lt: String(currentMonth).padStart(2, "0") } }
+            ]
+          }
+        ];
+      } else if (expiry === "expiring_soon") {
+        // Expires within 3 months but not expired yet
+        where.AND = [
+          // Not expired
+          {
+            OR: [
+              { expYear: { gt: String(currentYear) } },
+              {
+                AND: [
+                  { expYear: String(currentYear) },
+                  { expMonth: { gte: String(currentMonth).padStart(2, "0") } }
+                ]
+              }
+            ]
+          },
+          // But expires before 3 months from now
+          {
+            OR: [
+              { expYear: { lt: String(futureYear) } },
+              {
+                AND: [
+                  { expYear: String(futureYear) },
+                  { expMonth: { lte: String(futureMonth).padStart(2, "0") } }
+                ]
+              }
+            ]
+          }
+        ];
+      } else if (expiry === "valid") {
+        // Valid for 3+ months
+        where.OR = [
+          { expYear: { gt: String(futureYear) } },
+          {
+            AND: [
+              { expYear: String(futureYear) },
+              { expMonth: { gt: String(futureMonth).padStart(2, "0") } }
+            ]
+          }
+        ];
+      }
+    }
+
+    // Filter by purchase history
+    if (hasPurchases === "true") {
+      where.purchases = { some: {} };
+    } else if (hasPurchases === "false") {
+      where.purchases = { none: {} };
+    }
+
+    // Search - include street and city
     if (search) {
-      where.OR = [
+      const searchConditions: Prisma.CardWhereInput[] = [
         { profileName: { contains: search, mode: "insensitive" } },
         { billingName: { contains: search, mode: "insensitive" } },
         { cardNumber: { contains: search } },
+        { billingAddress: { contains: search, mode: "insensitive" } },
+        { billingCity: { contains: search, mode: "insensitive" } },
         { account: { email: { contains: search, mode: "insensitive" } } },
       ];
+      
+      // Merge with existing OR/AND conditions if any from expiry filter
+      if (where.OR && !where.AND) {
+        // expiry filter used OR, wrap it
+        const existingOr = where.OR;
+        delete where.OR;
+        where.AND = [
+          { OR: existingOr },
+          { OR: searchConditions }
+        ];
+      } else if (where.AND) {
+        // expiry filter used AND, add search as another condition
+        (where.AND as Prisma.CardWhereInput[]).push({ OR: searchConditions });
+      } else {
+        where.OR = searchConditions;
+      }
     }
 
     // Build orderBy
-    const validSortFields = ["profileName", "cardType", "billingName", "createdAt", "expYear", "useCount", "lastUsedAt"];
+    const validSortFields = ["profileName", "cardType", "createdAt", "checkoutStatus", "useCount", "lastUsedAt"];
     const orderField = validSortFields.includes(sortBy) ? sortBy : "createdAt";
     const orderDir = sortOrder === "asc" ? "asc" : "desc";
     const orderBy: Prisma.CardOrderByWithRelationInput = { [orderField]: orderDir };

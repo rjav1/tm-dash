@@ -254,8 +254,6 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
           }
           if (tm.date) {
             const dateObj = new Date(tm.date + "T12:00:00");
-            const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dateObj.getDay()];
-            setDayOfWeek(dayName);
             
             const formatted = dateObj.toLocaleDateString("en-US", {
               month: "long",

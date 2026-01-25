@@ -46,6 +46,7 @@ type ColumnKey =
   | "expiry" 
   | "cvv" 
   | "billingName" 
+  | "street"
   | "city" 
   | "state" 
   | "zip" 
@@ -64,6 +65,7 @@ const COLUMN_LABELS: Record<ColumnKey, string> = {
   expiry: "Expiry",
   cvv: "CVV",
   billingName: "Billing Name",
+  street: "Street",
   city: "City",
   state: "State",
   zip: "Zip",
@@ -73,20 +75,19 @@ const COLUMN_LABELS: Record<ColumnKey, string> = {
   lastUsed: "Last Used",
 };
 
-// Default visible columns (cardType hidden by default)
+// Default visible columns - ordered: name, card number, expiry, cvv, street, city, state, zip, phone
 const DEFAULT_VISIBLE_COLUMNS: Set<ColumnKey> = new Set([
-  "profile",
-  "status",
-  "checkoutStatus",
-  "email",
+  "billingName",
   "cardNumber",
   "expiry",
   "cvv",
-  "billingName",
+  "street",
   "city",
   "state",
   "zip",
   "phone",
+  "status",
+  "checkoutStatus",
   "purchases",
 ]);
 
@@ -129,7 +130,7 @@ interface Stats {
   declined: number;
 }
 
-type SortField = "profileName" | "cardType" | "billingName" | "createdAt" | "expYear";
+type SortField = "profileName" | "cardType" | "createdAt" | "checkoutStatus" | "purchaseCount" | "useCount";
 type SortOrder = "asc" | "desc";
 
 function SortHeader({ 
@@ -165,6 +166,10 @@ export default function CardsPage() {
   const [search, setSearch] = useState("");
   const [linkedFilter, setLinkedFilter] = useState<string>("all");
   const [checkoutStatusFilter, setCheckoutStatusFilter] = useState<string>("all");
+  const [cardTypeFilter, setCardTypeFilter] = useState<string>("all");
+  const [stateFilter, setStateFilter] = useState<string>("all");
+  const [hasPurchasesFilter, setHasPurchasesFilter] = useState<string>("all");
+  const [expiryFilter, setExpiryFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortField>("profileName");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [showNumbers, setShowNumbers] = useState(false);
@@ -223,6 +228,10 @@ export default function CardsPage() {
       if (search) params.set("search", search);
       if (linkedFilter !== "all") params.set("linked", linkedFilter);
       if (checkoutStatusFilter !== "all") params.set("checkoutStatus", checkoutStatusFilter);
+      if (cardTypeFilter !== "all") params.set("cardType", cardTypeFilter);
+      if (stateFilter !== "all") params.set("state", stateFilter);
+      if (hasPurchasesFilter !== "all") params.set("hasPurchases", hasPurchasesFilter);
+      if (expiryFilter !== "all") params.set("expiry", expiryFilter);
       if (showDeleted) params.set("includeDeleted", "true");
       params.set("sortBy", sortBy);
       params.set("sortOrder", sortOrder);
@@ -240,7 +249,7 @@ export default function CardsPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, linkedFilter, checkoutStatusFilter, showDeleted, sortBy, sortOrder, page, pageSize]);
+  }, [search, linkedFilter, checkoutStatusFilter, cardTypeFilter, stateFilter, hasPurchasesFilter, expiryFilter, showDeleted, sortBy, sortOrder, page, pageSize]);
 
   // Soft delete/restore cards
   const handleDeleteCards = async (cardIds: string[], action: "delete" | "restore") => {
@@ -528,52 +537,138 @@ export default function CardsPage() {
       {/* Search & Filters */}
       <Card>
         <CardContent className="pt-6">
-          <form onSubmit={handleSearch} className="flex gap-4 flex-wrap">
-            <div className="flex-1 min-w-[250px]">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by profile name, email, or card number..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-10"
-                />
-                {search && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7 p-0"
-                    onClick={() => setSearch("")}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                )}
+          <form onSubmit={handleSearch} className="space-y-4">
+            {/* First row: Search and primary filters */}
+            <div className="flex gap-4 flex-wrap">
+              <div className="flex-1 min-w-[250px]">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by name, email, card number, street, city..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-10"
+                  />
+                  {search && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7 p-0"
+                      onClick={() => setSearch("")}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               </div>
+              <Button type="submit">Search</Button>
             </div>
-            <Select value={linkedFilter} onValueChange={setLinkedFilter}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="Link Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Cards</SelectItem>
-                <SelectItem value="true">Linked Only</SelectItem>
-                <SelectItem value="false">Unlinked Only</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={checkoutStatusFilter} onValueChange={setCheckoutStatusFilter}>
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder="Checkout Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="AVAILABLE">Available</SelectItem>
-                <SelectItem value="IN_USE">In Use</SelectItem>
-                <SelectItem value="DECLINED">Declined</SelectItem>
-                <SelectItem value="EXHAUSTED">Exhausted</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button type="submit">Search</Button>
+            
+            {/* Second row: All filters */}
+            <div className="flex gap-3 flex-wrap items-center">
+              <span className="text-sm text-muted-foreground">Filters:</span>
+              
+              <Select value={linkedFilter} onValueChange={setLinkedFilter}>
+                <SelectTrigger className="w-[130px]">
+                  <SelectValue placeholder="Link Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Links</SelectItem>
+                  <SelectItem value="true">Linked</SelectItem>
+                  <SelectItem value="false">Unlinked</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Select value={checkoutStatusFilter} onValueChange={setCheckoutStatusFilter}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue placeholder="Checkout" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="AVAILABLE">Available</SelectItem>
+                  <SelectItem value="IN_USE">In Use</SelectItem>
+                  <SelectItem value="DECLINED">Declined</SelectItem>
+                  <SelectItem value="EXHAUSTED">Exhausted</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Select value={cardTypeFilter} onValueChange={setCardTypeFilter}>
+                <SelectTrigger className="w-[130px]">
+                  <SelectValue placeholder="Card Type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="Visa">Visa</SelectItem>
+                  <SelectItem value="Mastercard">Mastercard</SelectItem>
+                  <SelectItem value="Amex">Amex</SelectItem>
+                  <SelectItem value="Discover">Discover</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Select value={stateFilter} onValueChange={setStateFilter}>
+                <SelectTrigger className="w-[120px]">
+                  <SelectValue placeholder="State" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All States</SelectItem>
+                  <SelectItem value="CA">California</SelectItem>
+                  <SelectItem value="NY">New York</SelectItem>
+                  <SelectItem value="TX">Texas</SelectItem>
+                  <SelectItem value="FL">Florida</SelectItem>
+                  <SelectItem value="IL">Illinois</SelectItem>
+                  <SelectItem value="PA">Pennsylvania</SelectItem>
+                  <SelectItem value="OH">Ohio</SelectItem>
+                  <SelectItem value="GA">Georgia</SelectItem>
+                  <SelectItem value="NC">North Carolina</SelectItem>
+                  <SelectItem value="MI">Michigan</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Select value={hasPurchasesFilter} onValueChange={setHasPurchasesFilter}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue placeholder="Purchases" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="true">Has Purchases</SelectItem>
+                  <SelectItem value="false">No Purchases</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Select value={expiryFilter} onValueChange={setExpiryFilter}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="Expiry" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Expiry</SelectItem>
+                  <SelectItem value="expired">Expired</SelectItem>
+                  <SelectItem value="expiring_soon">Expiring Soon (3mo)</SelectItem>
+                  <SelectItem value="valid">Valid (3+ mo)</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              {/* Clear filters button */}
+              {(linkedFilter !== "all" || checkoutStatusFilter !== "all" || cardTypeFilter !== "all" || 
+                stateFilter !== "all" || hasPurchasesFilter !== "all" || expiryFilter !== "all") && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setLinkedFilter("all");
+                    setCheckoutStatusFilter("all");
+                    setCardTypeFilter("all");
+                    setStateFilter("all");
+                    setHasPurchasesFilter("all");
+                    setExpiryFilter("all");
+                  }}
+                >
+                  <X className="h-4 w-4 mr-1" />
+                  Clear Filters
+                </Button>
+              )}
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -614,29 +709,35 @@ export default function CardsPage() {
                       onCheckedChange={handleSelectAll}
                     />
                   </TableHead>
-                  {isColumnVisible("profile") && (
-                    <SortHeader field="profileName" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Profile</SortHeader>
-                  )}
-                  {isColumnVisible("status") && <TableHead>Status</TableHead>}
-                  {isColumnVisible("checkoutStatus") && <TableHead>Checkout</TableHead>}
-                  {isColumnVisible("email") && <TableHead>Account Email</TableHead>}
-                  {isColumnVisible("cardType") && (
-                    <SortHeader field="cardType" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Card Type</SortHeader>
-                  )}
+                  {/* Ordered: name, card number, expiry, cvv, street, city, state, zip, phone, then status columns */}
+                  {isColumnVisible("billingName") && <TableHead>Name</TableHead>}
                   {isColumnVisible("cardNumber") && <TableHead>Card Number</TableHead>}
-                  {isColumnVisible("expiry") && (
-                    <SortHeader field="expYear" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Expiry</SortHeader>
-                  )}
+                  {isColumnVisible("expiry") && <TableHead>Expiry</TableHead>}
                   {isColumnVisible("cvv") && <TableHead>CVV</TableHead>}
-                  {isColumnVisible("billingName") && (
-                    <SortHeader field="billingName" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Billing Name</SortHeader>
-                  )}
+                  {isColumnVisible("street") && <TableHead>Street</TableHead>}
                   {isColumnVisible("city") && <TableHead>City</TableHead>}
                   {isColumnVisible("state") && <TableHead>State</TableHead>}
                   {isColumnVisible("zip") && <TableHead>Zip</TableHead>}
                   {isColumnVisible("phone") && <TableHead>Phone</TableHead>}
-                  {isColumnVisible("purchases") && <TableHead>Purchases</TableHead>}
-                  {isColumnVisible("useCount") && <TableHead>Uses</TableHead>}
+                  {isColumnVisible("profile") && (
+                    <SortHeader field="profileName" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Profile</SortHeader>
+                  )}
+                  {isColumnVisible("email") && <TableHead>Account Email</TableHead>}
+                  {isColumnVisible("cardType") && (
+                    <SortHeader field="cardType" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Card Type</SortHeader>
+                  )}
+                  {isColumnVisible("status") && (
+                    <SortHeader field="checkoutStatus" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Status</SortHeader>
+                  )}
+                  {isColumnVisible("checkoutStatus") && (
+                    <SortHeader field="checkoutStatus" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Checkout</SortHeader>
+                  )}
+                  {isColumnVisible("purchases") && (
+                    <SortHeader field="purchaseCount" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Purchases</SortHeader>
+                  )}
+                  {isColumnVisible("useCount") && (
+                    <SortHeader field="useCount" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Uses</SortHeader>
+                  )}
                   {isColumnVisible("lastUsed") && <TableHead>Last Used</TableHead>}
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
@@ -657,67 +758,17 @@ export default function CardsPage() {
                         onCheckedChange={(checked) => handleSelectOne(card.id, !!checked)}
                       />
                     </TableCell>
-                    {isColumnVisible("profile") && (
-                      <TableCell className="font-medium">
-                        {card.profileName}
-                      </TableCell>
-                    )}
-                    {isColumnVisible("status") && (
-                      <TableCell>
-                        <div className="flex gap-1 flex-wrap">
-                          {card.isDeleted && (
-                            <Badge variant="destructive" className="gap-1">
-                              <Trash2 className="h-3 w-3" />
-                              Deleted
-                            </Badge>
-                          )}
-                          {card.isLinked ? (
-                            <Badge variant="default" className="gap-1">
-                              <Link2 className="h-3 w-3" />
-                              Linked
-                            </Badge>
-                          ) : (
-                            <Badge variant="secondary" className="gap-1">
-                              <Unlink className="h-3 w-3" />
-                              Unlinked
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                    )}
-                    {isColumnVisible("checkoutStatus") && (
-                      <TableCell>
-                        {card.checkoutStatus === "AVAILABLE" && (
-                          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">Available</Badge>
-                        )}
-                        {card.checkoutStatus === "IN_USE" && (
-                          <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">In Use</Badge>
-                        )}
-                        {card.checkoutStatus === "DECLINED" && (
-                          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Declined</Badge>
-                        )}
-                        {card.checkoutStatus === "EXHAUSTED" && (
-                          <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-200">Exhausted</Badge>
-                        )}
-                      </TableCell>
-                    )}
-                    {isColumnVisible("email") && (
+                    {/* Ordered: name, card number, expiry, cvv, street, city, state, zip, phone */}
+                    {isColumnVisible("billingName") && (
                       <TableCell onClick={(e) => e.stopPropagation()}>
-                        {card.account?.email ? (
-                          <span
-                            className="cursor-pointer hover:text-primary hover:underline"
-                            onClick={() => copyToClipboard(card.account!.email, "Email")}
-                            title="Click to copy"
-                          >
-                            {card.account.email}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
+                        <span
+                          className="cursor-pointer hover:text-primary hover:underline font-medium"
+                          onClick={() => copyToClipboard(card.billingName, "Name")}
+                          title="Click to copy"
+                        >
+                          {card.billingName}
+                        </span>
                       </TableCell>
-                    )}
-                    {isColumnVisible("cardType") && (
-                      <TableCell>{card.cardType}</TableCell>
                     )}
                     {isColumnVisible("cardNumber") && (
                       <TableCell className="font-mono text-sm" onClick={(e) => e.stopPropagation()}>
@@ -754,14 +805,14 @@ export default function CardsPage() {
                         </span>
                       </TableCell>
                     )}
-                    {isColumnVisible("billingName") && (
+                    {isColumnVisible("street") && (
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <span
                           className="cursor-pointer hover:text-primary hover:underline"
-                          onClick={() => copyToClipboard(card.billingName, "Name")}
+                          onClick={() => copyToClipboard(card.billingAddress, "Street")}
                           title="Click to copy"
                         >
-                          {card.billingName}
+                          {card.billingAddress || "-"}
                         </span>
                       </TableCell>
                     )}
@@ -810,6 +861,68 @@ export default function CardsPage() {
                           </span>
                         ) : (
                           <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                    )}
+                    {isColumnVisible("profile") && (
+                      <TableCell className="font-medium">
+                        {card.profileName}
+                      </TableCell>
+                    )}
+                    {isColumnVisible("email") && (
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        {card.account?.email ? (
+                          <span
+                            className="cursor-pointer hover:text-primary hover:underline"
+                            onClick={() => copyToClipboard(card.account!.email, "Email")}
+                            title="Click to copy"
+                          >
+                            {card.account.email}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                    )}
+                    {isColumnVisible("cardType") && (
+                      <TableCell>{card.cardType}</TableCell>
+                    )}
+                    {isColumnVisible("status") && (
+                      <TableCell>
+                        <div className="flex gap-1 flex-wrap">
+                          {card.isDeleted && (
+                            <Badge variant="destructive" className="gap-1">
+                              <Trash2 className="h-3 w-3" />
+                              Deleted
+                            </Badge>
+                          )}
+                          {card.isLinked ? (
+                            <Badge variant="default" className="gap-1">
+                              <Link2 className="h-3 w-3" />
+                              Linked
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary" className="gap-1">
+                              <Unlink className="h-3 w-3" />
+                              Unlinked
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                    )}
+                    {isColumnVisible("checkoutStatus") && (
+                      <TableCell>
+                        {card.checkoutStatus === "AVAILABLE" && (
+                          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">Available</Badge>
+                        )}
+                        {card.checkoutStatus === "IN_USE" && (
+                          <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">In Use</Badge>
+                        )}
+                        {card.checkoutStatus === "DECLINED" && (
+                          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Declined</Badge>
+                        )}
+                        {card.checkoutStatus === "EXHAUSTED" && (
+                          <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-200">Exhausted</Badge>
                         )}
                       </TableCell>
                     )}

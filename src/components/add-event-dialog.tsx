@@ -179,8 +179,6 @@ export function AddEventDialog({ onCreated }: AddEventDialogProps) {
           if (tm.date && !eventDateRaw) {
             // Parse date and format nicely
             const dateObj = new Date(tm.date + "T12:00:00");
-            const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dateObj.getDay()];
-            setDayOfWeek(dayName);
             
             // Format date as "Month Day, Year"
             const formatted = dateObj.toLocaleDateString("en-US", {
