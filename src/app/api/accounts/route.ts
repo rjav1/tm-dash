@@ -11,13 +11,15 @@ import { AccountStatus, Prisma } from "@prisma/client";
  * - status: Filter by account status (ACTIVE, BANNED, SUSPENDED, INACTIVE, PENDING)
  * - hasCard: Filter by card linkage ("true" = has cards, "false" = no cards)
  * - hasPurchases: Filter by successful purchases ("true" = has purchases)
+ * - tagId: Filter by tag ID
+ * - generated: Filter by generated status ("true" = generated, "false" = not generated)
  * - page: Page number (default: 1)
  * - limit: Items per page (default: 50, max: 100)
  * - sortBy: Sort field (email, status, createdAt, imapProvider, purchases, successRate)
  * - sortOrder: Sort direction (asc, desc)
  * 
  * Response:
- * - accounts: Array of account objects with stats and linked cards
+ * - accounts: Array of account objects with stats, linked cards, and tags
  * - pagination: { page, limit, total, pages }
  */
 export async function GET(request: NextRequest) {
@@ -73,6 +75,20 @@ export async function GET(request: NextRequest) {
       where.posAccountId = null;
     }
 
+    // Filter by tag
+    const tagId = searchParams.get("tagId");
+    if (tagId) {
+      where.tags = { some: { id: tagId } };
+    }
+
+    // Filter by generated status
+    const generated = searchParams.get("generated");
+    if (generated === "true") {
+      where.generatorJobId = { not: null };
+    } else if (generated === "false") {
+      where.generatorJobId = null;
+    }
+
     // Build orderBy - only for DB-sortable fields
     const dbSortFields = ["email", "status", "createdAt", "imapProvider"];
     const computedSortFields = ["purchases", "successRate"];
@@ -100,6 +116,13 @@ export async function GET(request: NextRequest) {
               profileName: true,
             },
             orderBy: { createdAt: "asc" },
+          },
+          tags: {
+            select: {
+              id: true,
+              name: true,
+              color: true,
+            },
           },
           _count: {
             select: {
@@ -163,6 +186,12 @@ export async function GET(request: NextRequest) {
         // POS import status
         posAccountId: account.posAccountId,
         posImportedAt: account.posImportedAt,
+        // Generation metadata
+        generatedAt: account.generatedAt,
+        generatorJobId: account.generatorJobId,
+        isGenerated: !!account.generatorJobId,
+        // Tags
+        tags: account.tags,
         cards: account.cards.map(c => ({
           id: c.id,
           type: c.cardType,

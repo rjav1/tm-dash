@@ -22,13 +22,14 @@ export async function GET(request: NextRequest) {
     // Get total count
     const total = await prisma.generatorJob.count({ where });
 
-    // Get jobs with task counts
+    // Get jobs with task counts and tag
     const jobs = await prisma.generatorJob.findMany({
       where,
       orderBy: { createdAt: "desc" },
       skip,
       take: limit,
       include: {
+        tag: true,
         _count: {
           select: { tasks: true },
         },
@@ -55,87 +56,160 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/generator/jobs
- * Create a new generator job with tasks
+ * Create a new generator job using emails and proxies from pools
  * 
  * Body:
- * - emails: string (one email,imap per line)
- * - proxies: string (one proxy per line)
+ * - emailCount: number (how many emails to use from pool)
+ * - imapProvider: "aycd" | "gmail" (which IMAP provider to use)
+ * - autoImport: boolean (auto-import successful accounts, default false)
  * - threadCount: number (1-10)
+ * - tagId: string (optional, tag to apply to generated accounts)
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { emails, proxies, threadCount = 1 } = body;
+    const { 
+      emailCount, 
+      imapProvider = "aycd", 
+      autoImport = false,
+      threadCount = 1, 
+      tagId 
+    } = body;
 
-    if (!emails || typeof emails !== "string") {
+    // Validate email count
+    if (!emailCount || typeof emailCount !== "number" || emailCount < 1) {
       return NextResponse.json(
-        { error: "Emails are required" },
+        { error: "Email count must be at least 1" },
         { status: 400 }
       );
     }
 
-    // Parse emails (format: email,imap per line)
-    const emailLines = emails
-      .split("\n")
-      .map((line: string) => line.trim())
-      .filter((line: string) => line.length > 0);
-
-    if (emailLines.length === 0) {
+    // Validate IMAP provider
+    if (!["aycd", "gmail"].includes(imapProvider)) {
       return NextResponse.json(
-        { error: "No valid emails provided" },
+        { error: "IMAP provider must be 'aycd' or 'gmail'" },
         { status: 400 }
       );
     }
 
-    // Parse proxies (one per line)
-    const proxyList = proxies
-      ? proxies
-          .split("\n")
-          .map((line: string) => line.trim())
-          .filter((line: string) => line.length > 0)
-      : [];
+    // Get available emails from pool
+    const availableEmails = await prisma.generatorEmail.findMany({
+      where: { status: "AVAILABLE" },
+      orderBy: { createdAt: "asc" },
+      take: emailCount,
+    });
 
-    // Create tasks from emails
-    const tasks = emailLines.map((line: string, index: number) => {
-      const parts = line.split(",");
-      const email = parts[0]?.trim() || "";
-      const imapSource = parts[1]?.trim() || "aycd";
-      // Assign proxies round-robin if available
-      const proxy = proxyList.length > 0 ? proxyList[index % proxyList.length] : null;
+    if (availableEmails.length === 0) {
+      return NextResponse.json(
+        { error: "No available emails in pool. Add emails first." },
+        { status: 400 }
+      );
+    }
 
-      return {
-        email,
-        imapSource,
-        proxy,
-        status: "PENDING",
-      };
+    if (availableEmails.length < emailCount) {
+      return NextResponse.json(
+        { 
+          error: `Only ${availableEmails.length} emails available in pool, requested ${emailCount}`,
+          available: availableEmails.length,
+        },
+        { status: 400 }
+      );
+    }
+
+    // Get available proxies from pool (ordered by use count for round-robin)
+    const availableProxies = await prisma.generatorProxy.findMany({
+      where: { status: "AVAILABLE" },
+      orderBy: [
+        { useCount: "asc" },
+        { lastUsedAt: "asc" },
+      ],
     });
 
     // Validate thread count
     const validThreadCount = Math.max(1, Math.min(10, threadCount));
 
-    // Create job with tasks in a transaction
-    const job = await prisma.generatorJob.create({
-      data: {
+    // Validate tag if provided
+    if (tagId) {
+      const tagExists = await prisma.accountTag.findUnique({
+        where: { id: tagId },
+      });
+      if (!tagExists) {
+        return NextResponse.json(
+          { error: "Tag not found" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Create tasks from selected emails with round-robin proxy assignment
+    const tasks = availableEmails.map((emailRecord, index) => {
+      // Assign proxy round-robin if available
+      const proxyRecord = availableProxies.length > 0 
+        ? availableProxies[index % availableProxies.length] 
+        : null;
+
+      return {
+        email: emailRecord.email,
+        imapSource: imapProvider,
+        proxy: proxyRecord?.proxy || null,
         status: "PENDING",
-        threadCount: validThreadCount,
-        totalTasks: tasks.length,
-        tasks: {
-          create: tasks,
+      };
+    });
+
+    // Use transaction to create job and update email/proxy statuses
+    const job = await prisma.$transaction(async (tx) => {
+      // Mark emails as IN_USE
+      await tx.generatorEmail.updateMany({
+        where: { id: { in: availableEmails.map((e) => e.id) } },
+        data: { status: "IN_USE" },
+      });
+
+      // Update proxy use counts
+      if (availableProxies.length > 0) {
+        const proxyUseCount: Record<string, number> = {};
+        for (let i = 0; i < availableEmails.length; i++) {
+          const proxyId = availableProxies[i % availableProxies.length].id;
+          proxyUseCount[proxyId] = (proxyUseCount[proxyId] || 0) + 1;
+        }
+
+        for (const [proxyId, count] of Object.entries(proxyUseCount)) {
+          await tx.generatorProxy.update({
+            where: { id: proxyId },
+            data: {
+              useCount: { increment: count },
+              lastUsedAt: new Date(),
+            },
+          });
+        }
+      }
+
+      // Create the job with tasks
+      return tx.generatorJob.create({
+        data: {
+          status: "PENDING",
+          threadCount: validThreadCount,
+          totalTasks: tasks.length,
+          imapProvider,
+          autoImport,
+          tagId: tagId || null,
+          tasks: {
+            create: tasks,
+          },
         },
-      },
-      include: {
-        tasks: true,
-        _count: {
-          select: { tasks: true },
+        include: {
+          tag: true,
+          _count: {
+            select: { tasks: true },
+          },
         },
-      },
+      });
     });
 
     return NextResponse.json({
       success: true,
       job,
       message: `Created job with ${tasks.length} tasks`,
+      proxiesUsed: availableProxies.length,
     });
   } catch (error) {
     console.error("Error creating generator job:", error);

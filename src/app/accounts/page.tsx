@@ -27,6 +27,12 @@ import { useToast } from "@/hooks/use-toast";
 import { PaginationControls } from "@/components/pagination-controls";
 import { AccountEditDialog } from "@/components/account-edit-dialog";
 
+interface AccountTag {
+  id: string;
+  name: string;
+  color: string | null;
+}
+
 interface Account {
   id: string;
   email: string;
@@ -38,6 +44,12 @@ interface Account {
   // POS import status
   posAccountId: number | null;
   posImportedAt: string | null;
+  // Generation metadata
+  generatedAt: string | null;
+  generatorJobId: string | null;
+  isGenerated: boolean;
+  // Tags
+  tags: AccountTag[];
   cards: {
     id: string;
     type: string;
@@ -141,6 +153,11 @@ export default function AccountsPage() {
   const [posImportedFilter, setPosImportedFilter] = useState<string>("all");
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [syncingFromPos, setSyncingFromPos] = useState(false);
+  
+  // Tag filter state
+  const [tags, setTags] = useState<AccountTag[]>([]);
+  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [generatedFilter, setGeneratedFilter] = useState<string>("all");
 
   const { toast } = useToast();
 
@@ -207,6 +224,17 @@ export default function AccountsPage() {
     }
   };
 
+  // Fetch tags for filter dropdown
+  const fetchTags = useCallback(async () => {
+    try {
+      const response = await fetch("/api/tags");
+      const data = await response.json();
+      setTags(data.tags || []);
+    } catch (error) {
+      console.error("Failed to fetch tags:", error);
+    }
+  }, []);
+
   const fetchAccounts = useCallback(async () => {
     setLoading(true);
     try {
@@ -222,6 +250,8 @@ export default function AccountsPage() {
       if (cardFilter !== "all") params.set("hasCard", cardFilter);
       if (purchaseFilter !== "all") params.set("hasPurchases", purchaseFilter);
       if (posImportedFilter !== "all") params.set("posImported", posImportedFilter);
+      if (tagFilter !== "all") params.set("tagId", tagFilter);
+      if (generatedFilter !== "all") params.set("generated", generatedFilter);
 
       const response = await fetch(`/api/accounts?${params}`);
       const data = await response.json();
@@ -234,7 +264,11 @@ export default function AccountsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, search, statusFilter, cardFilter, purchaseFilter, posImportedFilter, sortBy, sortOrder]);
+  }, [page, pageSize, search, statusFilter, cardFilter, purchaseFilter, posImportedFilter, tagFilter, generatedFilter, sortBy, sortOrder]);
+
+  useEffect(() => {
+    fetchTags();
+  }, [fetchTags]);
 
   useEffect(() => {
     fetchAccounts();
@@ -601,6 +635,35 @@ export default function AccountsPage() {
                 <SelectItem value="false">Not in POS</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={tagFilter} onValueChange={setTagFilter}>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue placeholder="Tag" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Tags</SelectItem>
+                {tags.map((tag) => (
+                  <SelectItem key={tag.id} value={tag.id}>
+                    <span className="flex items-center gap-2">
+                      <span
+                        className="w-2 h-2 rounded-full"
+                        style={{ backgroundColor: tag.color || "#6b7280" }}
+                      />
+                      {tag.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={generatedFilter} onValueChange={setGeneratedFilter}>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue placeholder="Source" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sources</SelectItem>
+                <SelectItem value="true">Generated</SelectItem>
+                <SelectItem value="false">Imported</SelectItem>
+              </SelectContent>
+            </Select>
             <Button type="submit">Search</Button>
           </form>
         </CardContent>
@@ -646,6 +709,7 @@ export default function AccountsPage() {
                     <SortHeader field="email">Email</SortHeader>
                     <TableHead>Password</TableHead>
                     <SortHeader field="status">Status</SortHeader>
+                    <TableHead>Tags</TableHead>
                     <TableHead>Card</TableHead>
                     <SortHeader field="purchases">Purchases</SortHeader>
                     <SortHeader field="successRate">Success Rate</SortHeader>
@@ -713,9 +777,38 @@ export default function AccountsPage() {
                             )}
                           </TableCell>
                           <TableCell>
-                            <Badge variant={statusColors[account.status] || "default"}>
-                              {account.status}
-                            </Badge>
+                            <div className="flex items-center gap-1 flex-wrap">
+                              <Badge variant={statusColors[account.status] || "default"}>
+                                {account.status}
+                              </Badge>
+                              {account.isGenerated && (
+                                <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950 dark:text-purple-300">
+                                  Generated
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {account.tags && account.tags.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {account.tags.map((tag) => (
+                                  <Badge
+                                    key={tag.id}
+                                    variant="outline"
+                                    className="text-xs gap-1"
+                                    style={{ borderColor: tag.color || undefined }}
+                                  >
+                                    <span
+                                      className="w-2 h-2 rounded-full"
+                                      style={{ backgroundColor: tag.color || "#6b7280" }}
+                                    />
+                                    {tag.name}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">-</span>
+                            )}
                           </TableCell>
                           <TableCell>
                             {account.cards.length > 0 ? (
@@ -792,7 +885,7 @@ export default function AccountsPage() {
                         {/* Expanded Row */}
                         {isExpanded && (
                           <TableRow key={`${account.id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
-                            <TableCell colSpan={11} className="p-0">
+                            <TableCell colSpan={12} className="p-0">
                               <div className="px-4 py-3 border-l-4 border-primary/30">
                                 {/* Tab Buttons */}
                                 <div className="flex gap-2 mb-3">
