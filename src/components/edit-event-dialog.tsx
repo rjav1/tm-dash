@@ -69,7 +69,6 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
   const [artistName, setArtistName] = useState(event.artistName || "");
   const [eventName, setEventName] = useState(event.eventName);
   const [venue, setVenue] = useState(event.venue || "");
-  const [dayOfWeek, setDayOfWeek] = useState(event.dayOfWeek || "");
   const [eventDateRaw, setEventDateRaw] = useState(event.eventDateRaw || "");
   const [getInPriceUrl, setGetInPriceUrl] = useState(event.getInPriceUrl || "");
   
@@ -93,7 +92,6 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
       setArtistName(event.artistName || "");
       setEventName(event.eventName);
       setVenue(event.venue || "");
-      setDayOfWeek(event.dayOfWeek || "");
       setEventDateRaw(event.eventDateRaw || "");
       setGetInPriceUrl(event.getInPriceUrl || "");
       setSyncStatus("idle");
@@ -227,9 +225,6 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
             if (sc.venueState) venueParts.push(sc.venueState);
             setVenue(venueParts.join(", "));
           }
-          if (sc.dayOfWeek) {
-            setDayOfWeek(sc.dayOfWeek);
-          }
           if (sc.date) {
             let dateStr = sc.date;
             if (sc.time) {
@@ -305,7 +300,6 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
           artistName: artistName || null,
           eventName,
           venue: venue || null,
-          dayOfWeek: dayOfWeek || null,
           eventDateRaw: eventDateRaw || null,
           getInPriceUrl: getInPriceUrl || null,
         }),
@@ -503,36 +497,18 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
                 />
               </div>
 
-              {/* Day of Week and Date */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="dayOfWeek">Day of Week</Label>
-                  <Select 
-                    value={dayOfWeek || "not_set"} 
-                    onValueChange={(v) => setDayOfWeek(v === "not_set" ? "" : v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select day..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="not_set">Not set</SelectItem>
-                      {DAYS_OF_WEEK.map((day) => (
-                        <SelectItem key={day} value={day}>
-                          {day}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="eventDateRaw">Date</Label>
-                  <Input
-                    id="eventDateRaw"
-                    value={eventDateRaw}
-                    onChange={(e) => setEventDateRaw(e.target.value)}
-                    placeholder="e.g., October 7, 2026 at 7:00 PM"
-                  />
-                </div>
+              {/* Date */}
+              <div className="grid gap-2">
+                <Label htmlFor="eventDateRaw">Date</Label>
+                <Input
+                  id="eventDateRaw"
+                  value={eventDateRaw}
+                  onChange={(e) => setEventDateRaw(e.target.value)}
+                  placeholder="e.g., October 7, 2026 at 7:00 PM"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Day of week is automatically derived from the date.
+                </p>
               </div>
 
               {/* Vivid Seats URL */}

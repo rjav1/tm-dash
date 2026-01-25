@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/table";
 import { EditEventDialog } from "@/components/edit-event-dialog";
 import { AddEventDialog } from "@/components/add-event-dialog";
-import { formatDateWithDay } from "@/lib/utils";
+import { formatDateWithDay, getDayOfWeek } from "@/lib/utils";
 import { PaginationControls } from "@/components/pagination-controls";
 import { useToast } from "@/hooks/use-toast";
 
@@ -462,7 +462,7 @@ export default function EventsPage() {
                     <TableCell>
                       {event.eventDateRaw ? (
                         <div>
-                          {event.dayOfWeek && <span className="font-medium">{event.dayOfWeek}, </span>}
+                          {event.eventDate && <span className="font-medium">{getDayOfWeek(event.eventDate)}, </span>}
                           {event.eventDateRaw}
                         </div>
                       ) : "-"}
