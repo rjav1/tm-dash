@@ -70,6 +70,23 @@ model ImapCredential {
 }
 
 // ========================================
+// Account Tags - For organizing/filtering accounts
+// ========================================
+
+model AccountTag {
+  id        String   @id @default(cuid())
+  name      String   @unique // e.g., "Eric", "Client-A"
+  color     String?  // Optional hex color for UI display
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  accounts      Account[]
+  generatorJobs GeneratorJob[]
+
+  @@map("account_tags")
+}
+
+// ========================================
 // Core Tables
 // ========================================
 
@@ -83,6 +100,11 @@ model Account {
   notes            String?
   createdAt        DateTime      @default(now()) @map("created_at")
   updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  // Generation metadata (when account was created by generator)
+  generatedAt      DateTime?     @map("generated_at")       // When account was generated
+  generatorJobId   String?       @map("generator_job_id")   // Link to job that created it
+  generatorTaskId  String?       @map("generator_task_id")  // Link to specific task
 
   // POS/TicketVault account import metadata
   posAccountId        Int?       @unique @map("pos_account_id") // TicketVault CompanySeasonSiteID from purchase/account
@@ -111,10 +133,13 @@ model Account {
   creationProxy    Proxy?          @relation("CreationProxy", fields: [creationProxyId], references: [id], onDelete: SetNull)
   runtimeProxy     Proxy?          @relation("RuntimeProxy", fields: [runtimeProxyId], references: [id], onDelete: SetNull)
   imapCredential   ImapCredential? @relation(fields: [imapCredentialId], references: [id], onDelete: SetNull)
+  tags             AccountTag[]    // Tags for organizing accounts
+  checkoutJobs     CheckoutJob[]   // Checkout jobs for this account
 
   @@index([creationProxyId])
   @@index([runtimeProxyId])
   @@index([imapCredentialId])
+  @@index([generatorJobId])
   @@map("accounts")
 }
 
@@ -137,11 +162,18 @@ model Card {
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
+  // Checkout tracking
+  checkoutStatus String    @default("AVAILABLE") @map("checkout_status") // AVAILABLE, IN_USE, DECLINED, EXHAUSTED
+  useCount       Int       @default(0) @map("use_count")
+  lastUsedAt     DateTime? @map("last_used_at")
+
   // Relations
-  account   Account?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  purchases Purchase[]
+  account      Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  purchases    Purchase[]
+  checkoutJobs CheckoutJob[]
 
   @@index([accountId])
+  @@index([checkoutStatus])
   @@map("cards")
 }
 
@@ -653,6 +685,15 @@ model GeneratorJob {
   status       String    @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
   threadCount  Int       @default(1) @map("thread_count")
 
+  // Tag to apply to generated accounts
+  tagId        String?   @map("tag_id")
+
+  // IMAP provider for this job
+  imapProvider String    @default("aycd") @map("imap_provider") // "aycd" or "gmail"
+
+  // Auto-import successful accounts immediately
+  autoImport   Boolean   @default(false) @map("auto_import")
+
   // Progress tracking
   totalTasks   Int       @default(0) @map("total_tasks")
   completed    Int       @default(0)
@@ -670,9 +711,11 @@ model GeneratorJob {
 
   // Relations
   tasks        GeneratorTask[]
+  tag          AccountTag?     @relation(fields: [tagId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([createdAt])
+  @@index([tagId])
   @@map("generator_jobs")
 }
 
@@ -696,6 +739,10 @@ model GeneratorTask {
   lastName     String?   @map("last_name")
   postalCode   String?   @map("postal_code")
 
+  // Import status (for manual import workflow)
+  imported     Boolean   @default(false)
+  importedAt   DateTime? @map("imported_at")
+
   // Timing
   startedAt    DateTime? @map("started_at")
   completedAt  DateTime? @map("completed_at")
@@ -708,6 +755,7 @@ model GeneratorTask {
 
   @@index([jobId])
   @@index([status])
+  @@index([imported])
   @@map("generator_tasks")
 }
 
@@ -718,4 +766,145 @@ model GeneratorConfig {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("generator_config")
+}
+
+// ========================================
+// Generator Pools - Email and Proxy Management
+// ========================================
+
+model GeneratorEmail {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  status    String    @default("AVAILABLE") // AVAILABLE, IN_USE, USED
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("generator_emails")
+}
+
+model GeneratorProxy {
+  id         String    @id @default(cuid())
+  proxy      String    @unique
+  status     String    @default("AVAILABLE") // AVAILABLE, IN_USE, BAD
+  useCount   Int       @default(0) @map("use_count")
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([status])
+  @@index([useCount])
+  @@map("generator_proxies")
+}
+
+model GeneratorBadProxy {
+  id         String   @id @default(cuid())
+  proxy      String
+  reason     String?
+  jobId      String?  @map("job_id")
+  detectedAt DateTime @default(now()) @map("detected_at")
+
+  @@index([detectedAt])
+  @@map("generator_bad_proxies")
+}
+
+// ========================================
+// Checkout System - TM Checkout Integration
+// ========================================
+
+model CheckoutJob {
+  id            String    @id @default(cuid())
+  discordMsgId  String?   @map("discord_msg_id")
+  targetUrl     String    @map("target_url")
+  
+  // Status
+  status        String    @default("QUEUED") // QUEUED, RUNNING, SUCCESS, FAILED, NEEDS_REVIEW, CANCELLED
+  workerId      String?   @map("worker_id")
+  attemptCount  Int       @default(0) @map("attempt_count")
+  
+  // Timing
+  createdAt     DateTime  @default(now()) @map("created_at")
+  startedAt     DateTime? @map("started_at")
+  completedAt   DateTime? @map("completed_at")
+  expiresAt     Int?      @map("expires_at") // Unix timestamp
+  
+  // Event info (denormalized from Discord webhook)
+  eventName     String?   @map("event_name")
+  tmEventId     String?   @map("tm_event_id") // Ticketmaster event ID
+  venue         String?
+  eventDate     String?   @map("event_date")
+  section       String?
+  row           String?
+  seats         String?
+  quantity      Int       @default(1)
+  priceEach     Decimal?  @map("price_each") @db.Decimal(10, 2)
+  totalPrice    Decimal?  @map("total_price") @db.Decimal(10, 2)
+  currency      String?   // USD or CAD
+  
+  // Account/Card linking
+  accountId     String?   @map("account_id")
+  cardId        String?   @map("card_id")
+  accountEmail  String?   @map("account_email")
+  cardLast4     String?   @map("card_last_4")
+  
+  // Outcome
+  finalUrl      String?   @map("final_url")
+  errorCode     String?   @map("error_code")
+  errorMessage  String?   @map("error_message")
+  tmOrderNumber String?   @map("tm_order_number")
+  
+  // Import tracking
+  imported      Boolean   @default(false)
+  importedAt    DateTime? @map("imported_at")
+  purchaseId    String?   @map("purchase_id")
+  
+  // Run tracking
+  runId         String?   @map("run_id")
+  
+  // Relations
+  account       Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  card          Card?     @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  run           CheckoutRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([accountId])
+  @@index([cardId])
+  @@index([runId])
+  @@index([createdAt])
+  @@index([imported])
+  @@map("checkout_jobs")
+}
+
+model CheckoutRun {
+  id           String    @id @default(cuid())
+  workerId     String    @map("worker_id")
+  status       String    @default("RUNNING") // RUNNING, COMPLETED, ABORTED
+  
+  // Timing
+  startedAt    DateTime  @default(now()) @map("started_at")
+  endedAt      DateTime? @map("ended_at")
+  
+  // Stats
+  jobsQueued   Int       @default(0) @map("jobs_queued")
+  jobsSuccess  Int       @default(0) @map("jobs_success")
+  jobsFailed   Int       @default(0) @map("jobs_failed")
+  jobsReview   Int       @default(0) @map("jobs_review")
+  
+  notes        String?
+  
+  // Relations
+  jobs         CheckoutJob[]
+
+  @@index([workerId])
+  @@index([startedAt])
+  @@map("checkout_runs")
+}
+
+model CheckoutConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   // JSON string for complex values
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("checkout_config")
 }

@@ -9,22 +9,24 @@ import { Prisma } from "@prisma/client";
  * Query Parameters:
  * - search: Filter by profile name, billing name, card number, or linked account email
  * - linked: Filter by linkage status ("true" = linked, "false" = unlinked)
+ * - checkoutStatus: Filter by checkout status (AVAILABLE, IN_USE, DECLINED, EXHAUSTED)
  * - includeDeleted: Include soft-deleted cards ("true" to include)
  * - page: Page number (default: 1)
  * - limit: Items per page (default: 50, max: 100)
- * - sortBy: Sort field (profileName, cardType, billingName, createdAt, expYear)
+ * - sortBy: Sort field (profileName, cardType, billingName, createdAt, expYear, useCount, lastUsedAt)
  * - sortOrder: Sort direction (asc, desc)
  * 
  * Response:
- * - cards: Array of card objects with linked account info and purchase count
+ * - cards: Array of card objects with linked account info, purchase count, and checkout stats
  * - pagination: { page, limit, total, pages }
- * - stats: { total, linked, unlinked, deleted }
+ * - stats: { total, linked, unlinked, deleted, available, declined }
  */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") || "";
     const linked = searchParams.get("linked"); // "true", "false", or null for all
+    const checkoutStatus = searchParams.get("checkoutStatus"); // AVAILABLE, IN_USE, DECLINED, EXHAUSTED
     const includeDeleted = searchParams.get("includeDeleted") === "true"; // Show soft-deleted cards
     const sortBy = searchParams.get("sortBy") || "createdAt";
     const sortOrder = searchParams.get("sortOrder") || "desc";
@@ -47,6 +49,11 @@ export async function GET(request: NextRequest) {
       where.accountId = null;
     }
 
+    // Filter by checkout status
+    if (checkoutStatus) {
+      where.checkoutStatus = checkoutStatus;
+    }
+
     // Search
     if (search) {
       where.OR = [
@@ -58,14 +65,14 @@ export async function GET(request: NextRequest) {
     }
 
     // Build orderBy
-    const validSortFields = ["profileName", "cardType", "billingName", "createdAt", "expYear"];
+    const validSortFields = ["profileName", "cardType", "billingName", "createdAt", "expYear", "useCount", "lastUsedAt"];
     const orderField = validSortFields.includes(sortBy) ? sortBy : "createdAt";
     const orderDir = sortOrder === "asc" ? "asc" : "desc";
     const orderBy: Prisma.CardOrderByWithRelationInput = { [orderField]: orderDir };
 
     // Stats should count only active (non-deleted) cards
     const activeCardFilter = { deletedAt: null };
-    const [cards, filteredTotal, totalCards, linkedCards, unlinkedCards, deletedCards] = await Promise.all([
+    const [cards, filteredTotal, totalCards, linkedCards, unlinkedCards, deletedCards, availableCards, declinedCards] = await Promise.all([
       prisma.card.findMany({
         where,
         orderBy,
@@ -82,6 +89,7 @@ export async function GET(request: NextRequest) {
           _count: {
             select: {
               purchases: true,
+              checkoutJobs: true,
             },
           },
         },
@@ -91,6 +99,8 @@ export async function GET(request: NextRequest) {
       prisma.card.count({ where: { ...activeCardFilter, accountId: { not: null } } }),
       prisma.card.count({ where: { ...activeCardFilter, accountId: null } }),
       prisma.card.count({ where: { deletedAt: { not: null } } }),
+      prisma.card.count({ where: { ...activeCardFilter, checkoutStatus: "AVAILABLE" } }),
+      prisma.card.count({ where: { ...activeCardFilter, checkoutStatus: "DECLINED" } }),
     ]);
 
     return NextResponse.json({
@@ -111,8 +121,13 @@ export async function GET(request: NextRequest) {
         deletedAt: card.deletedAt,
         account: card.account,
         purchaseCount: card._count.purchases,
+        checkoutJobCount: card._count.checkoutJobs,
         isLinked: card.accountId !== null,
         isDeleted: card.deletedAt !== null,
+        // Checkout tracking fields
+        checkoutStatus: card.checkoutStatus,
+        useCount: card.useCount,
+        lastUsedAt: card.lastUsedAt,
       })),
       pagination: {
         page,
@@ -125,6 +140,8 @@ export async function GET(request: NextRequest) {
         linked: linkedCards,
         unlinked: unlinkedCards,
         deleted: deletedCards,
+        available: availableCards,
+        declined: declinedCards,
       },
     });
   } catch (error) {

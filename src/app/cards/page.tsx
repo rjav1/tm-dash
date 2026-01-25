@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Search, Download, ArrowUpDown, Link2, Unlink, Pencil, X, Settings2, Trash2, RotateCcw, Eye, EyeOff } from "lucide-react";
+import { Search, Download, ArrowUpDown, Link2, Unlink, Pencil, X, Settings2, Trash2, RotateCcw, Eye, EyeOff, CreditCard, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +39,7 @@ import { PaginationControls } from "@/components/pagination-controls";
 type ColumnKey = 
   | "profile" 
   | "status" 
+  | "checkoutStatus"
   | "email" 
   | "cardType" 
   | "cardNumber" 
@@ -49,11 +50,14 @@ type ColumnKey =
   | "state" 
   | "zip" 
   | "phone" 
-  | "purchases";
+  | "purchases"
+  | "useCount"
+  | "lastUsed";
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
   profile: "Profile",
   status: "Status",
+  checkoutStatus: "Checkout",
   email: "Account Email",
   cardType: "Card Type",
   cardNumber: "Card Number",
@@ -65,12 +69,15 @@ const COLUMN_LABELS: Record<ColumnKey, string> = {
   zip: "Zip",
   phone: "Phone",
   purchases: "Purchases",
+  useCount: "Uses",
+  lastUsed: "Last Used",
 };
 
 // Default visible columns (cardType hidden by default)
 const DEFAULT_VISIBLE_COLUMNS: Set<ColumnKey> = new Set([
   "profile",
   "status",
+  "checkoutStatus",
   "email",
   "cardNumber",
   "expiry",
@@ -104,8 +111,13 @@ interface CardData {
     status: string;
   } | null;
   purchaseCount: number;
+  checkoutJobCount: number;
   isLinked: boolean;
   isDeleted: boolean;
+  // Checkout tracking
+  checkoutStatus: string;
+  useCount: number;
+  lastUsedAt: string | null;
 }
 
 interface Stats {
@@ -113,6 +125,8 @@ interface Stats {
   linked: number;
   unlinked: number;
   deleted: number;
+  available: number;
+  declined: number;
 }
 
 type SortField = "profileName" | "cardType" | "billingName" | "createdAt" | "expYear";
@@ -150,6 +164,7 @@ export default function CardsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [linkedFilter, setLinkedFilter] = useState<string>("all");
+  const [checkoutStatusFilter, setCheckoutStatusFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortField>("profileName");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [showNumbers, setShowNumbers] = useState(false);
@@ -207,6 +222,7 @@ export default function CardsPage() {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
       if (linkedFilter !== "all") params.set("linked", linkedFilter);
+      if (checkoutStatusFilter !== "all") params.set("checkoutStatus", checkoutStatusFilter);
       if (showDeleted) params.set("includeDeleted", "true");
       params.set("sortBy", sortBy);
       params.set("sortOrder", sortOrder);
@@ -224,7 +240,7 @@ export default function CardsPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, linkedFilter, showDeleted, sortBy, sortOrder, page, pageSize]);
+  }, [search, linkedFilter, checkoutStatusFilter, showDeleted, sortBy, sortOrder, page, pageSize]);
 
   // Soft delete/restore cards
   const handleDeleteCards = async (cardIds: string[], action: "delete" | "restore") => {
@@ -454,7 +470,7 @@ export default function CardsPage() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-6">
           <Card>
             <CardContent className="pt-6">
               <div className="text-2xl font-bold">{stats.total}</div>
@@ -467,7 +483,7 @@ export default function CardsPage() {
                 <Link2 className="h-5 w-5 text-green-500" />
                 {stats.linked}
               </div>
-              <p className="text-sm text-muted-foreground">Linked to Accounts</p>
+              <p className="text-sm text-muted-foreground">Linked</p>
             </CardContent>
           </Card>
           <Card>
@@ -476,16 +492,34 @@ export default function CardsPage() {
                 <Unlink className="h-5 w-5 text-orange-500" />
                 {stats.unlinked}
               </div>
-              <p className="text-sm text-muted-foreground">Unlinked Cards</p>
+              <p className="text-sm text-muted-foreground">Unlinked</p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-6">
               <div className="text-2xl font-bold flex items-center gap-2">
-                <Trash2 className="h-5 w-5 text-red-500" />
+                <CheckCircle2 className="h-5 w-5 text-green-500" />
+                {stats.available}
+              </div>
+              <p className="text-sm text-muted-foreground">Available</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-2xl font-bold flex items-center gap-2">
+                <AlertCircle className="h-5 w-5 text-red-500" />
+                {stats.declined}
+              </div>
+              <p className="text-sm text-muted-foreground">Declined</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-2xl font-bold flex items-center gap-2">
+                <Trash2 className="h-5 w-5 text-gray-500" />
                 {stats.deleted}
               </div>
-              <p className="text-sm text-muted-foreground">Deleted Cards</p>
+              <p className="text-sm text-muted-foreground">Deleted</p>
             </CardContent>
           </Card>
         </div>
@@ -525,6 +559,18 @@ export default function CardsPage() {
                 <SelectItem value="all">All Cards</SelectItem>
                 <SelectItem value="true">Linked Only</SelectItem>
                 <SelectItem value="false">Unlinked Only</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={checkoutStatusFilter} onValueChange={setCheckoutStatusFilter}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="Checkout Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="AVAILABLE">Available</SelectItem>
+                <SelectItem value="IN_USE">In Use</SelectItem>
+                <SelectItem value="DECLINED">Declined</SelectItem>
+                <SelectItem value="EXHAUSTED">Exhausted</SelectItem>
               </SelectContent>
             </Select>
             <Button type="submit">Search</Button>
@@ -572,6 +618,7 @@ export default function CardsPage() {
                     <SortHeader field="profileName" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Profile</SortHeader>
                   )}
                   {isColumnVisible("status") && <TableHead>Status</TableHead>}
+                  {isColumnVisible("checkoutStatus") && <TableHead>Checkout</TableHead>}
                   {isColumnVisible("email") && <TableHead>Account Email</TableHead>}
                   {isColumnVisible("cardType") && (
                     <SortHeader field="cardType" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Card Type</SortHeader>
@@ -589,6 +636,8 @@ export default function CardsPage() {
                   {isColumnVisible("zip") && <TableHead>Zip</TableHead>}
                   {isColumnVisible("phone") && <TableHead>Phone</TableHead>}
                   {isColumnVisible("purchases") && <TableHead>Purchases</TableHead>}
+                  {isColumnVisible("useCount") && <TableHead>Uses</TableHead>}
+                  {isColumnVisible("lastUsed") && <TableHead>Last Used</TableHead>}
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -634,6 +683,22 @@ export default function CardsPage() {
                             </Badge>
                           )}
                         </div>
+                      </TableCell>
+                    )}
+                    {isColumnVisible("checkoutStatus") && (
+                      <TableCell>
+                        {card.checkoutStatus === "AVAILABLE" && (
+                          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">Available</Badge>
+                        )}
+                        {card.checkoutStatus === "IN_USE" && (
+                          <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">In Use</Badge>
+                        )}
+                        {card.checkoutStatus === "DECLINED" && (
+                          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Declined</Badge>
+                        )}
+                        {card.checkoutStatus === "EXHAUSTED" && (
+                          <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-200">Exhausted</Badge>
+                        )}
                       </TableCell>
                     )}
                     {isColumnVisible("email") && (
@@ -755,6 +820,20 @@ export default function CardsPage() {
                         ) : (
                           <span className="text-muted-foreground">0</span>
                         )}
+                      </TableCell>
+                    )}
+                    {isColumnVisible("useCount") && (
+                      <TableCell>
+                        {card.useCount > 0 ? (
+                          <Badge variant="outline">{card.useCount}</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
+                      </TableCell>
+                    )}
+                    {isColumnVisible("lastUsed") && (
+                      <TableCell className="text-sm text-muted-foreground">
+                        {card.lastUsedAt ? new Date(card.lastUsedAt).toLocaleDateString() : "-"}
                       </TableCell>
                     )}
                     <TableCell onClick={(e) => e.stopPropagation()}>
