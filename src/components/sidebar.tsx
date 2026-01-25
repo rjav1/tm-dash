@@ -15,6 +15,7 @@ import {
   Package,
   Receipt,
   Zap,
+  ShoppingBag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +31,7 @@ const navigation = [
   { name: "Error Analysis", href: "/analytics", icon: AlertTriangle },
   { name: "Import Data", href: "/import", icon: Upload },
   { name: "Generator", href: "/generator", icon: Zap },
+  { name: "Checkout", href: "/checkout", icon: ShoppingBag },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 
