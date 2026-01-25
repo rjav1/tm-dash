@@ -7,7 +7,6 @@
 
 import { NextResponse } from "next/server";
 import { syncPurchasesToPOS, getPurchasesReadyForSync, PurchaseSyncItem } from "@/lib/services/pos-sync";
-import { SPLIT_TYPES, SPLIT_TYPE_LABELS } from "@/lib/services/ticketvault-api";
 
 /**
  * GET /api/pos/sync
@@ -103,8 +102,3 @@ export async function POST(request: Request) {
   }
 }
 
-/**
- * GET /api/pos/sync/options
- * Get available split type options
- */
-export { SPLIT_TYPES, SPLIT_TYPE_LABELS };
