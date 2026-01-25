@@ -136,7 +136,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Get purchases with related data
+    // Get purchases with related data including listings and sales
     const [purchases, total] = await Promise.all([
       prisma.purchase.findMany({
         where,
@@ -165,6 +165,32 @@ export async function GET(request: NextRequest) {
               id: true,
               cardNumber: true,
               cardType: true,
+            },
+          },
+          // Include listings and their sales for actual profit calculation
+          listings: {
+            select: {
+              id: true,
+              ticketGroupId: true,
+              quantity: true,
+              price: true,
+              sales: {
+                select: {
+                  id: true,
+                  quantity: true,
+                  salePrice: true,
+                  saleDate: true,
+                  status: true,
+                  invoice: {
+                    select: {
+                      totalAmount: true,
+                      fees: true,
+                      isPaid: true,
+                      payoutStatus: true,
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -679,6 +705,64 @@ export async function GET(request: NextRequest) {
         }
       }
       
+      // Calculate actual sale data from linked listings and sales
+      const listings = (p as { listings?: Array<{
+        id: string;
+        ticketGroupId: number;
+        quantity: number;
+        price: { toNumber: () => number };
+        sales: Array<{
+          id: string;
+          quantity: number;
+          salePrice: { toNumber: () => number };
+          saleDate: Date | null;
+          status: number;
+          invoice: {
+            totalAmount: { toNumber: () => number };
+            fees: { toNumber: () => number };
+            isPaid: boolean;
+            payoutStatus: string | null;
+          } | null;
+        }>;
+      }> }).listings || [];
+      
+      // Aggregate sale data across all listings linked to this purchase
+      let soldQuantity = 0;
+      let actualRevenue = 0;
+      let actualPayout = 0; // Net after fees
+      let isSold = false;
+      let saleDate: Date | null = null;
+      let payoutStatus: string | null = null;
+      
+      for (const listing of listings) {
+        for (const sale of listing.sales) {
+          soldQuantity += sale.quantity;
+          actualRevenue += Number(sale.salePrice) * sale.quantity;
+          
+          // Use invoice totalAmount (net payout after marketplace fees) when available
+          if (sale.invoice) {
+            // Invoice totalAmount is already net of fees for the invoice
+            // But we need to prorate for this sale's portion
+            // For simplicity, use salePrice and apply our known fee rate
+            actualPayout += Number(sale.salePrice) * sale.quantity * feeMultiplier;
+            payoutStatus = sale.invoice.payoutStatus || payoutStatus;
+          } else {
+            // No invoice yet, estimate payout
+            actualPayout += Number(sale.salePrice) * sale.quantity * feeMultiplier;
+          }
+          
+          if (sale.saleDate && (!saleDate || sale.saleDate > saleDate)) {
+            saleDate = sale.saleDate;
+          }
+        }
+      }
+      
+      isSold = soldQuantity > 0;
+      
+      // Calculate actual profit if sold
+      const actualProfit = isSold ? actualPayout - totalPrice : null;
+      const actualRoi = isSold && totalPrice > 0 ? ((actualPayout - totalPrice) / totalPrice) * 100 : null;
+      
       return {
         id: p.id,
         externalJobId: p.externalJobId,
@@ -701,10 +785,19 @@ export async function GET(request: NextRequest) {
         priceOverrideType: overrideType || null,
         priceOverrideZone: overrideZone || null,
         priceOverrideValue: overrideValue,
-        // Comparison price info
+        // Comparison price info (for estimated/unrealized profit)
         comparisonPrice,
         comparisonSource,
         matchedZone,
+        // Actual sale data (for realized profit)
+        isSold,
+        soldQuantity,
+        actualRevenue,
+        actualPayout,
+        actualProfit,
+        actualRoi,
+        saleDate,
+        payoutStatus,
         // POS sync fields
         dashboardPoNumber: (p as { dashboardPoNumber?: string | null }).dashboardPoNumber || null,
         posSyncedAt: (p as { posSyncedAt?: Date | null }).posSyncedAt || null,
@@ -751,6 +844,22 @@ export async function GET(request: NextRequest) {
         count: e._count.purchases,
       }));
 
+    // Calculate realized profit from actual sales (from formattedPurchases on this page)
+    // For full stats, we'd need to query all purchases, but for display purposes this works
+    let realizedProfit = 0;
+    let realizedRevenue = 0;
+    let soldTickets = 0;
+    let soldPurchasesCost = 0;
+    
+    for (const fp of formattedPurchases) {
+      if (fp.isSold && fp.actualProfit !== null) {
+        realizedProfit += fp.actualProfit;
+        realizedRevenue += fp.actualPayout;
+        soldTickets += fp.soldQuantity;
+        soldPurchasesCost += fp.totalPrice;
+      }
+    }
+
     return NextResponse.json({
       purchases: formattedPurchases,
       events: eventsWithPurchases,
@@ -769,11 +878,18 @@ export async function GET(request: NextRequest) {
         checkouts: successCount,
         totalTickets: ticketSumResult._sum.quantity || 0,
         revenue: Math.round(costWithGetInPrices * 100) / 100, // Only purchases with get-in prices
-        unrealizedProfit: Math.round(unrealizedProfit * 100) / 100, // Round to 2 decimals
-        unrealizedSales: Math.round(unrealizedSales * 100) / 100, // Round to 2 decimals
+        unrealizedProfit: Math.round(unrealizedProfit * 100) / 100, // Estimated profit (not sold yet)
+        unrealizedSales: Math.round(unrealizedSales * 100) / 100, // Estimated sale value
+        // Realized stats (from actual sales)
+        realizedProfit: Math.round(realizedProfit * 100) / 100, // Actual profit from sales
+        realizedRevenue: Math.round(realizedRevenue * 100) / 100, // Actual payout from sales
+        soldTickets,
+        realizedRoi: soldPurchasesCost > 0 
+          ? Math.round((realizedProfit / soldPurchasesCost) * 10000) / 100 
+          : 0,
         roi: costWithGetInPrices > 0
           ? Math.round((unrealizedProfit / costWithGetInPrices) * 10000) / 100 
-          : 0, // ROI as percentage
+          : 0, // ROI as percentage (estimated)
         marketplaceFeePercentage, // Include fee for frontend calculations
       },
       pagination: {

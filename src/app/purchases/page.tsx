@@ -77,6 +77,15 @@ interface Purchase {
   comparisonPrice: number | null;
   comparisonSource: string | null;
   matchedZone: string | null;
+  // Actual sale data (when sold)
+  isSold: boolean;
+  soldQuantity: number;
+  actualRevenue: number;
+  actualPayout: number;
+  actualProfit: number | null;
+  actualRoi: number | null;
+  saleDate: string | null;
+  payoutStatus: string | null;
   // POS sync fields
   posSyncedAt: string | null;
   posTicketGroupId: number | null;
@@ -131,6 +140,11 @@ interface Stats {
   unrealizedProfit: number;
   unrealizedSales: number;
   roi: number;
+  // Realized stats from actual sales
+  realizedProfit: number;
+  realizedRevenue: number;
+  soldTickets: number;
+  realizedRoi: number;
   marketplaceFeePercentage: number;
 }
 
@@ -684,16 +698,27 @@ export default function PurchasesPage() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid gap-4 md:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-6">
+          {/* Realized Profit - from actual sales */}
           <StatsCard
-            title="Unrealized Profit"
+            title="Realized Profit"
+            value={formatCurrency(stats.realizedProfit)}
+            description={stats.soldTickets > 0 
+              ? `${stats.soldTickets} sold • ROI: ${stats.realizedRoi >= 0 ? '+' : ''}${stats.realizedRoi.toFixed(1)}%`
+              : "No sales yet"}
+            icon={CheckCircle2}
+            valueClassName={stats.realizedProfit >= 0 ? "text-green-600" : "text-red-600"}
+          />
+          {/* Unrealized Profit - estimated from comparables */}
+          <StatsCard
+            title="Est. Profit (Unsold)"
             value={formatCurrency(stats.unrealizedProfit)}
             description={`ROI: ${stats.roi >= 0 ? '+' : ''}${stats.roi.toFixed(1)}% (after ${stats.marketplaceFeePercentage}% fee)`}
             icon={TrendingUp}
-            valueClassName={stats.unrealizedProfit >= 0 ? "text-green-600" : "text-red-600"}
+            valueClassName={stats.unrealizedProfit >= 0 ? "text-blue-600" : "text-orange-600"}
           />
           <StatsCard
-            title="Unrealized Sales"
+            title="Est. Sales (Unsold)"
             value={formatCurrency(stats.unrealizedSales)}
             description="at zone-matched prices"
             icon={DollarSign}
@@ -702,7 +727,7 @@ export default function PurchasesPage() {
           <StatsCard
             title="Total Cost"
             value={formatCurrency(stats.revenue)}
-            description="for tickets with get-in prices"
+            description="for tickets with prices"
             icon={DollarSign}
           />
           <StatsCard
@@ -1422,46 +1447,71 @@ export default function PurchasesPage() {
                             </div>
                             {purchase.status === "SUCCESS" && purchase.priceEach > 0 && stats && (
                               <div className="flex flex-col gap-0.5">
-                                <span className={`text-xs font-medium ${
-                                  (() => {
-                                    const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
-                                    const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
-                                    return saleAfterFees > purchase.priceEach 
-                                      ? "text-green-600" 
-                                      : saleAfterFees < purchase.priceEach 
-                                      ? "text-red-600" 
-                                      : "text-muted-foreground";
-                                  })()
-                                }`}>
-                                  {(() => {
-                                    const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
-                                    const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
-                                    const profit = saleAfterFees - purchase.priceEach;
-                                    return profit > 0
-                                      ? `+${formatCurrency(profit)}`
-                                      : profit < 0
-                                      ? `-${formatCurrency(Math.abs(profit))}`
-                                      : "Break even";
-                                  })()}
-                                </span>
-                                <span className={`text-[10px] font-medium ${
-                                  (() => {
-                                    const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
-                                    const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
-                                    return saleAfterFees > purchase.priceEach 
-                                      ? "text-green-600" 
-                                      : saleAfterFees < purchase.priceEach 
-                                      ? "text-red-600" 
-                                      : "text-muted-foreground";
-                                  })()
-                                }`}>
-                                  {(() => {
-                                    const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
-                                    const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
-                                    const roi = ((saleAfterFees - purchase.priceEach) / purchase.priceEach) * 100;
-                                    return `ROI: ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%`;
-                                  })()}
-                                </span>
+                                {/* Show actual profit if sold, otherwise estimated */}
+                                {purchase.isSold && purchase.actualProfit !== null ? (
+                                  <>
+                                    <span className={`text-xs font-medium ${
+                                      purchase.actualProfit > 0 ? "text-green-600" : purchase.actualProfit < 0 ? "text-red-600" : "text-muted-foreground"
+                                    }`}>
+                                      {purchase.actualProfit > 0
+                                        ? `+${formatCurrency(purchase.actualProfit / purchase.quantity)}`
+                                        : purchase.actualProfit < 0
+                                        ? `-${formatCurrency(Math.abs(purchase.actualProfit / purchase.quantity))}`
+                                        : "Break even"}
+                                    </span>
+                                    <span className={`text-[10px] font-medium ${
+                                      purchase.actualProfit > 0 ? "text-green-600" : purchase.actualProfit < 0 ? "text-red-600" : "text-muted-foreground"
+                                    }`}>
+                                      ROI: {purchase.actualRoi !== null ? `${purchase.actualRoi >= 0 ? '+' : ''}${purchase.actualRoi.toFixed(1)}%` : "-"}
+                                    </span>
+                                    <Badge variant="outline" className="text-[9px] px-1 py-0 bg-green-50 text-green-700 border-green-200">
+                                      SOLD
+                                    </Badge>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className={`text-xs font-medium ${
+                                      (() => {
+                                        const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
+                                        const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
+                                        return saleAfterFees > purchase.priceEach 
+                                          ? "text-blue-600" 
+                                          : saleAfterFees < purchase.priceEach 
+                                          ? "text-orange-600" 
+                                          : "text-muted-foreground";
+                                      })()
+                                    }`}>
+                                      {(() => {
+                                        const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
+                                        const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
+                                        const profit = saleAfterFees - purchase.priceEach;
+                                        return profit > 0
+                                          ? `~+${formatCurrency(profit)}`
+                                          : profit < 0
+                                          ? `~-${formatCurrency(Math.abs(profit))}`
+                                          : "Break even";
+                                      })()}
+                                    </span>
+                                    <span className={`text-[10px] font-medium ${
+                                      (() => {
+                                        const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
+                                        const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
+                                        return saleAfterFees > purchase.priceEach 
+                                          ? "text-blue-600" 
+                                          : saleAfterFees < purchase.priceEach 
+                                          ? "text-orange-600" 
+                                          : "text-muted-foreground";
+                                      })()
+                                    }`}>
+                                      {(() => {
+                                        const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
+                                        const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
+                                        const roi = ((saleAfterFees - purchase.priceEach) / purchase.priceEach) * 100;
+                                        return `Est. ROI: ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%`;
+                                      })()}
+                                    </span>
+                                  </>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1470,30 +1520,48 @@ export default function PurchasesPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        {purchase.comparisonPrice && purchase.status === "SUCCESS" && purchase.priceEach > 0 && stats ? (
+                        {purchase.status === "SUCCESS" && purchase.priceEach > 0 && stats ? (
                           <div className="flex flex-col gap-0.5">
-                            <span className={`font-semibold ${
-                              (() => {
-                                const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
-                                const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
-                                return saleAfterFees > purchase.priceEach 
-                                  ? "text-green-600" 
-                                  : saleAfterFees < purchase.priceEach 
-                                  ? "text-red-600" 
-                                  : "text-muted-foreground";
-                              })()
-                            }`}>
-                              {(() => {
-                                const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
-                                const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
-                                const profitPerTicket = saleAfterFees - purchase.priceEach;
-                                const totalProfit = profitPerTicket * purchase.quantity;
-                                return `${totalProfit >= 0 ? '+' : ''}${formatCurrency(totalProfit)}`;
-                              })()}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {purchase.quantity} {purchase.quantity === 1 ? 'ticket' : 'tickets'}
-                            </span>
+                            {/* Show actual total profit if sold, otherwise estimated */}
+                            {purchase.isSold && purchase.actualProfit !== null ? (
+                              <>
+                                <span className={`font-semibold ${
+                                  purchase.actualProfit > 0 ? "text-green-600" : purchase.actualProfit < 0 ? "text-red-600" : "text-muted-foreground"
+                                }`}>
+                                  {purchase.actualProfit >= 0 ? '+' : ''}{formatCurrency(purchase.actualProfit)}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                  {purchase.soldQuantity}/{purchase.quantity} sold
+                                </span>
+                              </>
+                            ) : purchase.comparisonPrice ? (
+                              <>
+                                <span className={`font-semibold ${
+                                  (() => {
+                                    const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
+                                    const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
+                                    return saleAfterFees > purchase.priceEach 
+                                      ? "text-blue-600" 
+                                      : saleAfterFees < purchase.priceEach 
+                                      ? "text-orange-600" 
+                                      : "text-muted-foreground";
+                                  })()
+                                }`}>
+                                  {(() => {
+                                    const feeMultiplier = 1 - (stats.marketplaceFeePercentage / 100);
+                                    const saleAfterFees = purchase.comparisonPrice * feeMultiplier;
+                                    const profitPerTicket = saleAfterFees - purchase.priceEach;
+                                    const totalProfit = profitPerTicket * purchase.quantity;
+                                    return `~${totalProfit >= 0 ? '+' : ''}${formatCurrency(totalProfit)}`;
+                                  })()}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                  {purchase.quantity} {purchase.quantity === 1 ? 'ticket' : 'tickets'} (est.)
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground text-sm">-</span>
+                            )}
                           </div>
                         ) : (
                           <span className="text-muted-foreground text-sm">-</span>
