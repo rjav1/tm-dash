@@ -264,22 +264,20 @@ npx prisma generate
 ## Environment Variables
 
 ```env
-# Database - Supabase
-# Using direct connection (works for both runtime and migrations)
-DATABASE_URL="postgresql://postgres:[YOUR-PASSWORD]@db.[project-ref].supabase.co:5432/postgres"
-DIRECT_URL="postgresql://postgres:[YOUR-PASSWORD]@db.[project-ref].supabase.co:5432/postgres"
+# Database - Supabase (Session Pooler for IPv4 compatibility)
+# Get from: Supabase Dashboard > Project Settings > Database > Connection String > Session Pooler
+DATABASE_URL="postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres"
+DIRECT_URL="postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres"
 
-# Note: If you see "IPv4 not compatible" errors, use the Session Pooler URL instead:
-# DATABASE_URL="postgresql://postgres.[project-ref]:[YOUR-PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true"
-# DIRECT_URL="postgresql://postgres.[project-ref]:[YOUR-PASSWORD]@aws-0-[region].pooler.supabase.com:5432/postgres"
-
-# TicketVault POS
+# TicketVault POS (optional - for POS integration)
 TICKETVAULT_USERNAME="your-username"
 TICKETVAULT_PASSWORD="your-password"
 
 # Optional
 NODE_ENV="development"
 ```
+
+See `.env.example` for a template.
 
 ---
 
