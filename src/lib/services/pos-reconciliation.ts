@@ -358,9 +358,11 @@ export async function importPosTicketToDashboard(
     });
 
     if (!event) {
-      // Create a minimal event record
+      // Create a minimal event record with a generated tmEventId
+      const generatedTmEventId = `POS-${tg.Id}-${Date.now()}`;
       event = await prisma.event.create({
         data: {
+          tmEventId: generatedTmEventId,
           eventName: tg.PrimaryEventName || tg.EventName,
           venue: tg.VenueName,
           eventDateRaw: tg.EventDateTime,

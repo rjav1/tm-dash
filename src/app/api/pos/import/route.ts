@@ -46,14 +46,15 @@ export async function GET() {
         );
 
         // Use the best match from all ticket groups
-        const bestMatch = ticketGroupsWithMatches.reduce(
+        type MatchResult = typeof ticketGroupsWithMatches[number];
+        const bestMatch = ticketGroupsWithMatches.reduce<MatchResult | { matchConfidence: "none"; matchedPurchaseId: null; matchReason: string }>(
           (best, current) => {
             const confidenceOrder = ["exact", "high", "medium", "low", "none"];
             const currentIdx = confidenceOrder.indexOf(current.matchConfidence);
             const bestIdx = confidenceOrder.indexOf(best.matchConfidence);
             return currentIdx < bestIdx ? current : best;
           },
-          { matchConfidence: "none" as const, matchedPurchaseId: null as string | null, matchReason: "" }
+          { matchConfidence: "none", matchedPurchaseId: null, matchReason: "" }
         );
 
         return {

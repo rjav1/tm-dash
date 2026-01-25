@@ -58,10 +58,11 @@ export async function POST() {
       );
     }
 
+    const { success: _, ...restResult } = result;
     return NextResponse.json({
       success: true,
       message: `Synced ${result.synced} listings from POS`,
-      ...result,
+      ...restResult,
     });
   } catch (error) {
     console.error("Sync listings error:", error);

@@ -1,8 +1,4 @@
-export * from "./ticketmaster";
-export * from "./vivid-seats-scraper";
-export * from "./ticketmaster-scraper";
-export * from "./event-sync";
-export * from "./ticketvault-api";
-export * from "./pos-sync";
-export * from "./pos-reconciliation";
-export * from "./listing-service";
+// Service exports - import directly from individual files to avoid naming collisions
+// Example: import { TicketVaultApi } from "@/lib/services/ticketvault-api";
+// Example: import { ListingService } from "@/lib/services/listing-service";
+// Example: import { SalesSync } from "@/lib/services/sales-sync";

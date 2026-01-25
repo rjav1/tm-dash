@@ -261,12 +261,13 @@ export async function POST(request: NextRequest) {
       // Sync invoices from POS
       const result = await SalesSync.syncInvoicesFromPos();
       
+      const { success, error, ...restResult } = result;
       return NextResponse.json({
-        success: result.success,
-        message: result.success
+        success,
+        message: success
           ? `Synced ${result.synced} invoices (${result.created} new, ${result.updated} updated)`
-          : result.error,
-        ...result,
+          : error,
+        ...restResult,
       });
     }
     

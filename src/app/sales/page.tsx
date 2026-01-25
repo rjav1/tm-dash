@@ -1294,6 +1294,7 @@ export default function SalesPage() {
             <PaginationControls
               page={salesPage}
               pageSize={limit}
+              totalPages={salesTotalPages}
               totalItems={salesTotal}
               onPageChange={setSalesPage}
             />
@@ -1518,6 +1519,7 @@ export default function SalesPage() {
             <PaginationControls
               page={invoicesPage}
               pageSize={limit}
+              totalPages={invoicesTotalPages}
               totalItems={invoicesTotal}
               onPageChange={setInvoicesPage}
             />

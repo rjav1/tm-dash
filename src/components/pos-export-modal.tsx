@@ -57,7 +57,7 @@ interface Purchase {
   priceEach: number;
   totalPrice: number;
   event: {
-    eventName: string;
+    name: string;
     venue: string | null;
   } | null;
   account: {
@@ -229,8 +229,8 @@ export function PosExportModal({
                   <TableRow key={purchase.id}>
                     <TableCell>
                       <div className="max-w-[200px]">
-                        <p className="font-medium truncate" title={purchase.event?.eventName || ""}>
-                          {purchase.event?.eventName || "No Event"}
+                        <p className="font-medium truncate" title={purchase.event?.name || ""}>
+                          {purchase.event?.name || "No Event"}
                         </p>
                         <p className="text-xs text-muted-foreground truncate">
                           {purchase.event?.venue}

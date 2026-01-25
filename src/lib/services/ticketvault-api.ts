@@ -462,9 +462,9 @@ export async function ensureAuthenticated(): Promise<void> {
 }
 
 /**
- * Search for events by name, date, and venue
+ * Search for events by name, date, and venue in TicketVault POS
  */
-export async function searchEvents(
+export async function searchTicketVaultEvents(
   eventName: string,
   eventDate: Date,
   venueName: string
@@ -2013,7 +2013,7 @@ export const TicketVaultApi = {
   login,
   refreshToken,
   ensureAuthenticated,
-  searchEvents,
+  searchEvents: searchTicketVaultEvents,
   saveTickets,
   testConnection,
   formatDateForApi,

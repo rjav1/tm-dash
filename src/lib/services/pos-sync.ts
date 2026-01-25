@@ -309,7 +309,7 @@ export async function findMatchingPosEvent(
       
       // Use retry results
       if (retryEvents.length === 1) {
-        console.log(`[POS Sync] Found 1 event on retry: ${retryEvents[0].Name} at ${retryEvents[0].Venue}`);
+        console.log(`[POS Sync] Found 1 event on retry: ${retryEvents[0].PrimaryEvent} at ${retryEvents[0].Venue}`);
         return retryEvents[0];
       }
       
@@ -321,7 +321,7 @@ export async function findMatchingPosEvent(
       );
       
       if (venueMatch) {
-        console.log(`[POS Sync] Matched event by venue: ${venueMatch.Name} at ${venueMatch.Venue}`);
+        console.log(`[POS Sync] Matched event by venue: ${venueMatch.PrimaryEvent} at ${venueMatch.Venue}`);
         return venueMatch;
       }
       
@@ -331,7 +331,7 @@ export async function findMatchingPosEvent(
 
     // If exactly one event, return it
     if (events.length === 1) {
-      console.log(`[POS Sync] Found 1 event: ${events[0].Name} at ${events[0].Venue}`);
+      console.log(`[POS Sync] Found 1 event: ${events[0].PrimaryEvent} at ${events[0].Venue}`);
       return events[0];
     }
 
@@ -343,13 +343,13 @@ export async function findMatchingPosEvent(
     );
 
     if (venueMatch) {
-      console.log(`[POS Sync] Matched event by venue from ${events.length} results: ${venueMatch.Name} at ${venueMatch.Venue}`);
+      console.log(`[POS Sync] Matched event by venue from ${events.length} results: ${venueMatch.PrimaryEvent} at ${venueMatch.Venue}`);
       return venueMatch;
     }
 
     // If we can't find a clear match with multiple events, return the first one
     // (they're all on the same date, so likely correct)
-    console.log(`[POS Sync] Multiple events found (${events.length}), returning first match: ${events[0].Name}`);
+    console.log(`[POS Sync] Multiple events found (${events.length}), returning first match: ${events[0].PrimaryEvent}`);
     return events[0];
   } catch (error) {
     console.error("[POS Sync] Event search failed:", error);
@@ -589,7 +589,8 @@ export async function syncPurchaseToPOS(
       // Check for specific failure reasons
       if (result.FailedEvents && Array.isArray(result.FailedEvents) && result.FailedEvents.length > 0) {
         // Parse the event failure reason
-        const eventErrors = result.FailedEvents.map((fe: { EventId?: number; Reason?: string }) => {
+        const failedEvents = result.FailedEvents as Array<{ EventId?: number; Reason?: string }>;
+        const eventErrors = failedEvents.map((fe) => {
           if (fe.Reason?.includes("Could not find")) {
             return `Event not found in POS - ensure the event is mapped first`;
           }
@@ -928,8 +929,8 @@ export async function getPosOrdersForImport(): Promise<PosImportCandidate[]> {
         posOrderId: order.Id,
         posCost: order.TotalCost,
         clientName: order.ClientName,
-        createdDate: order.CreatedDate || "",
-        createdBy: order.CreatedBy || "",
+        createdDate: "",
+        createdBy: "",
         ticketGroups: ticketGroups.map((tg) => ({
           ticketGroupId: tg.Id,
           section: tg.Section,
@@ -951,8 +952,8 @@ export async function getPosOrdersForImport(): Promise<PosImportCandidate[]> {
         posOrderId: order.Id,
         posCost: order.TotalCost,
         clientName: order.ClientName,
-        createdDate: order.CreatedDate || "",
-        createdBy: order.CreatedBy || "",
+        createdDate: "",
+        createdBy: "",
         ticketGroups: [],
       });
     }
