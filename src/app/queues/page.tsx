@@ -432,7 +432,7 @@ export default function QueuesPage() {
           <CardContent>
             <FileUpload
               onFileSelect={handleFileUpload}
-              description="Tab-separated file: email, event_id, position"
+              description="Tab-separated (.txt) or CSV (.csv) file: email, event_id, position"
               accept={{ "text/plain": [".txt"], "text/csv": [".csv"] }}
             />
             {importing && (
