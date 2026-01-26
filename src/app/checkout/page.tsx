@@ -1371,6 +1371,18 @@ export default function CheckoutPage() {
                   </Button>
                 </div>
                 
+                {/* Start Button - Starts a new run */}
+                <Button
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => handleControl("start")}
+                  disabled={isControlLoading !== null || isOffline}
+                  title="Start a new run, resume workers and listener"
+                >
+                  {isControlLoading === "start" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Play className="w-4 h-4 mr-1" />}
+                  Start Run
+                </Button>
+                
                 {/* Stop Button - Ends the run */}
                 <Button
                   variant="destructive"

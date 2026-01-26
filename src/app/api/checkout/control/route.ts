@@ -225,6 +225,45 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      case "start": {
+        // Start a new run - signals workers and listener to begin
+        // 1. Clear paused flag to allow workers to pick up jobs
+        await prisma.checkoutConfig.upsert({
+          where: { key: "paused" },
+          update: { value: "false" },
+          create: { key: "paused", value: "false" },
+        });
+        
+        // 2. Clear stop_listener flag so listener can start
+        await prisma.checkoutConfig.deleteMany({
+          where: { key: "stop_listener" },
+        });
+        
+        // 3. Check if there's already a running run
+        const existingRun = await prisma.checkoutRun.findFirst({
+          where: { status: "RUNNING" },
+        });
+        
+        let run = existingRun;
+        if (!existingRun) {
+          // 4. Create a new CheckoutRun (dashboard-initiated)
+          run = await prisma.checkoutRun.create({
+            data: {
+              workerId: "dashboard",
+              status: "RUNNING",
+              startedAt: new Date(),
+            },
+          });
+        }
+        
+        return NextResponse.json({
+          success: true,
+          message: existingRun ? "Run resumed" : "New run started",
+          runId: run?.id,
+          isNewRun: !existingRun,
+        });
+      }
+
       case "stop": {
         // Stop all workers and listener - signals end of run
         // 1. Set paused flag to stop workers from picking up new jobs
