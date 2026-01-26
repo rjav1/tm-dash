@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { TicketmasterEvent } from "@/lib/services/ticketmaster";
 import { getGetInPrice, VividSeatsPrice } from "@/lib/services/vivid-seats-scraper";
-import { scrapeEventPage, ScrapedEventData } from "@/lib/services/ticketmaster-scraper";
+import { scrapeEventPageFetch, ScrapedEventData } from "@/lib/services/ticketmaster-fetch-scraper";
+
+// Use fetch-based scraper (works on Vercel) instead of Puppeteer-based one
+const scrapeEventPage = scrapeEventPageFetch;
 
 export interface EventLookupRequest {
   eventId?: string;        // TM internal event ID (from queue/Discord webhook)

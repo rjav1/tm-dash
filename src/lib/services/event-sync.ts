@@ -14,7 +14,7 @@
  */
 
 import prisma from "@/lib/db";
-import { scrapeEventPage, ScrapedEventData } from "./ticketmaster-scraper";
+import { scrapeEventPageFetch as scrapeEventPage, ScrapedEventData } from "./ticketmaster-fetch-scraper";
 import { getGetInPrice, getGetInPriceFromUrl, VividSeatsPrice, ZonePrice, clearPriceCache } from "./vivid-seats-scraper";
 
 // ============================================
