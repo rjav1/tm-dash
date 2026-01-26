@@ -788,6 +788,20 @@ export default function CheckoutPage() {
   // Jobs ready for import
   const importableJobs = jobs.filter(j => j.status === "SUCCESS" && !j.imported);
   
+  // Computed job lists for different sections
+  const failedJobs = useMemo(() => 
+    jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW"), 
+    [jobs]
+  );
+  const successfulJobs = useMemo(() => 
+    jobs.filter(j => j.status === "SUCCESS"), 
+    [jobs]
+  );
+  const queuedJobs = useMemo(() => 
+    jobs.filter(j => j.status === "QUEUED" || j.status === "RUNNING"), 
+    [jobs]
+  );
+  
   // Compute if any workers are truly online (connected and not stale)
   const hasActiveWorkers = useMemo(() => {
     if (!stats?.workers?.runs) return false;
@@ -901,7 +915,7 @@ export default function CheckoutPage() {
         {/* Monitor Tab */}
         <TabsContent value="monitor">
           {/* Failed Jobs Section */}
-          {jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW").length > 0 && (
+          {failedJobs.length > 0 && (
             <Card className="mb-4 border-red-200">
               <CardHeader 
                 className="cursor-pointer select-none" 
@@ -911,7 +925,7 @@ export default function CheckoutPage() {
                   <div className="flex items-center gap-2">
                     <CardTitle className="text-red-600 flex items-center gap-2">
                       <AlertCircle className="w-5 h-5" />
-                      Failed Jobs ({jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW").length})
+                      Failed Jobs ({failedJobs.length})
                     </CardTitle>
                   </div>
                   <ChevronDown className={`w-5 h-5 transition-transform ${failedExpanded ? "rotate-180" : ""}`} />
@@ -933,7 +947,7 @@ export default function CheckoutPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW").map((job) => (
+                      {failedJobs.map((job) => (
                         <React.Fragment key={job.id}>
                           <TableRow 
                             className="cursor-pointer hover:bg-muted/50" 
@@ -1038,120 +1052,6 @@ export default function CheckoutPage() {
               )}
             </Card>
           )}
-          
-          {/* Successful Jobs Panel */}
-          {jobs.filter(j => j.status === "SUCCESS").length > 0 && (
-            <Card className="mb-4 border-green-200">
-              <CardHeader className="cursor-pointer py-3" onClick={() => setSuccessExpanded(!successExpanded)}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    <CardTitle className="text-green-700">
-                      Successful ({jobs.filter(j => j.status === "SUCCESS").length})
-                    </CardTitle>
-                  </div>
-                  <ChevronDown className={`w-5 h-5 transition-transform ${successExpanded ? "rotate-180" : ""}`} />
-                </div>
-              </CardHeader>
-              {successExpanded && (
-                <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-8"></TableHead>
-                        <TableHead>Event</TableHead>
-                        <TableHead>Section/Row</TableHead>
-                        <TableHead>Qty</TableHead>
-                        <TableHead>Total</TableHead>
-                        <TableHead>Card</TableHead>
-                        <TableHead>Completed</TableHead>
-                        <TableHead>Order #</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {jobs.filter(j => j.status === "SUCCESS").map((job) => (
-                        <React.Fragment key={job.id}>
-                          <TableRow 
-                            className="cursor-pointer hover:bg-muted/50" 
-                            onClick={() => setExpandedSuccessJobId(expandedSuccessJobId === job.id ? null : job.id)}
-                          >
-                            <TableCell>
-                              {expandedSuccessJobId === job.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                            </TableCell>
-                            <TableCell>
-                              <div className="font-medium">{job.eventName || "Unknown Event"}</div>
-                              <div className="text-xs text-muted-foreground">{job.venue}</div>
-                            </TableCell>
-                            <TableCell>{job.section && job.row ? `${job.section} / ${job.row}` : "-"}</TableCell>
-                            <TableCell className="text-center font-medium">{job.quantity || 1}</TableCell>
-                            <TableCell>{job.totalPrice ? `$${job.totalPrice}` : "-"}</TableCell>
-                            <TableCell>****{job.cardLast4 || "????"}</TableCell>
-                            <TableCell className="text-sm text-muted-foreground">{job.completedAt ? formatDate(job.completedAt) : "-"}</TableCell>
-                            <TableCell>
-                              {job.tmOrderNumber ? (
-                                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 font-mono">
-                                  {job.tmOrderNumber}
-                                </Badge>
-                              ) : "-"}
-                            </TableCell>
-                          </TableRow>
-                          {expandedSuccessJobId === job.id && (
-                            <TableRow>
-                              <TableCell colSpan={8} className="bg-green-50/30">
-                                <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">TM Event ID</Label>
-                                    <div className="font-mono text-xs">{job.tmEventId || "-"}</div>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">Event Date</Label>
-                                    <div>{job.eventDate || "-"}</div>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">Account Email</Label>
-                                    <div>{job.accountEmail || "-"}</div>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">Price Each</Label>
-                                    <div>{job.priceEach ? `$${job.priceEach}` : "-"}</div>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">Seats</Label>
-                                    <div>{job.seats || "-"}</div>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">Attempts</Label>
-                                    <div>{job.attemptCount}</div>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">Worker</Label>
-                                    <div className="font-mono text-xs">{job.workerId || "-"}</div>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs text-muted-foreground">Imported</Label>
-                                    <div>{job.imported ? "Yes" : "No"}</div>
-                                  </div>
-                                  {job.finalUrl && (
-                                    <div className="col-span-4">
-                                      <Label className="text-xs text-muted-foreground">Confirmation URL</Label>
-                                      <div className="truncate">
-                                        <a href={job.finalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{job.finalUrl}</a>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </React.Fragment>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              )}
-            </Card>
-          )}
-
           {/* Active Workers Panel */}
           {stats?.workers?.runs && stats.workers.runs.length > 0 && (() => {
             // Calculate total worker threads across all daemons
@@ -1357,8 +1257,8 @@ export default function CheckoutPage() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Job Queue</CardTitle>
-                  <CardDescription>Live view of checkout jobs</CardDescription>
+                  <CardTitle>Job Queue ({queuedJobs.length})</CardTitle>
+                  <CardDescription>Queued and running checkout jobs</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
                   {/* Bulk actions when jobs are selected */}
@@ -1388,33 +1288,20 @@ export default function CheckoutPage() {
                       </Button>
                     </>
                   )}
-                  {selectedQueueJobs.size === 0 && jobs.length > 0 && (
+                  {selectedQueueJobs.size === 0 && queuedJobs.length > 0 && (
                     <Button variant="ghost" size="sm" onClick={selectAllQueueJobs}>
                       Select All
                     </Button>
                   )}
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-40">
-                      <SelectValue placeholder="Filter status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Status</SelectItem>
-                      <SelectItem value="QUEUED">Queued</SelectItem>
-                      <SelectItem value="RUNNING">Running</SelectItem>
-                      <SelectItem value="SUCCESS">Success</SelectItem>
-                      <SelectItem value="FAILED">Failed</SelectItem>
-                      <SelectItem value="NEEDS_REVIEW">Needs Review</SelectItem>
-                    </SelectContent>
-                  </Select>
                 </div>
               </div>
             </CardHeader>
             <CardContent>
-              {jobs.length === 0 ? (
+              {queuedJobs.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground">
                   <Clock className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p>No checkout jobs found</p>
-                  <p className="text-sm">Jobs will appear here when Discord messages are processed</p>
+                  <p>No jobs in queue</p>
+                  <p className="text-sm">Queued and running jobs will appear here</p>
                 </div>
               ) : (
                 <Table>
@@ -1446,7 +1333,7 @@ export default function CheckoutPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {jobs.map((job) => (
+                    {queuedJobs.map((job) => (
                       <React.Fragment key={job.id}>
                         <TableRow className={`cursor-pointer hover:bg-muted/50 ${selectedQueueJobs.has(job.id) ? "bg-blue-50" : ""}`} onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}>
                           <TableCell onClick={(e) => e.stopPropagation()}>
@@ -1607,6 +1494,125 @@ export default function CheckoutPage() {
                 </Table>
               )}
             </CardContent>
+          </Card>
+          
+          {/* Successful Jobs Panel - Always visible at bottom */}
+          <Card className="mb-4 border-green-200">
+            <CardHeader className="cursor-pointer py-3" onClick={() => setSuccessExpanded(!successExpanded)}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-green-600" />
+                  <CardTitle className="text-green-700">
+                    Successful ({successfulJobs.length})
+                  </CardTitle>
+                </div>
+                <ChevronDown className={`w-5 h-5 transition-transform ${successExpanded ? "rotate-180" : ""}`} />
+              </div>
+            </CardHeader>
+            {successExpanded && successfulJobs.length > 0 && (
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8"></TableHead>
+                      <TableHead>Event</TableHead>
+                      <TableHead>Section/Row</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Total</TableHead>
+                      <TableHead>Card</TableHead>
+                      <TableHead>Completed</TableHead>
+                      <TableHead>Order #</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {successfulJobs.map((job) => (
+                      <React.Fragment key={job.id}>
+                        <TableRow 
+                          className="cursor-pointer hover:bg-muted/50" 
+                          onClick={() => setExpandedSuccessJobId(expandedSuccessJobId === job.id ? null : job.id)}
+                        >
+                          <TableCell>
+                            {expandedSuccessJobId === job.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium">{job.eventName || "Unknown Event"}</div>
+                            <div className="text-xs text-muted-foreground">{job.venue}</div>
+                          </TableCell>
+                          <TableCell>{job.section && job.row ? `${job.section} / ${job.row}` : "-"}</TableCell>
+                          <TableCell className="text-center font-medium">{job.quantity || 1}</TableCell>
+                          <TableCell>{job.totalPrice ? `$${job.totalPrice}` : "-"}</TableCell>
+                          <TableCell>****{job.cardLast4 || "????"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{job.completedAt ? formatDate(job.completedAt) : "-"}</TableCell>
+                          <TableCell>
+                            {job.tmOrderNumber ? (
+                              <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 font-mono">
+                                {job.tmOrderNumber}
+                              </Badge>
+                            ) : "-"}
+                          </TableCell>
+                        </TableRow>
+                        {expandedSuccessJobId === job.id && (
+                          <TableRow>
+                            <TableCell colSpan={8} className="bg-green-50/30">
+                              <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">TM Event ID</Label>
+                                  <div className="font-mono text-xs">{job.tmEventId || "-"}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Event Date</Label>
+                                  <div>{job.eventDate || "-"}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Account Email</Label>
+                                  <div>{job.accountEmail || "-"}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Price Each</Label>
+                                  <div>{job.priceEach ? `$${job.priceEach}` : "-"}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Seats</Label>
+                                  <div>{job.seats || "-"}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Attempts</Label>
+                                  <div>{job.attemptCount}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Worker</Label>
+                                  <div className="font-mono text-xs">{job.workerId || "-"}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Imported</Label>
+                                  <div>{job.imported ? "Yes" : "No"}</div>
+                                </div>
+                                {job.finalUrl && (
+                                  <div className="col-span-4">
+                                    <Label className="text-xs text-muted-foreground">Confirmation URL</Label>
+                                    <div className="truncate">
+                                      <a href={job.finalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{job.finalUrl}</a>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            )}
+            {successExpanded && successfulJobs.length === 0 && (
+              <CardContent>
+                <div className="text-center py-8 text-muted-foreground">
+                  <CheckCircle2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                  <p>No successful checkouts yet</p>
+                </div>
+              </CardContent>
+            )}
           </Card>
         </TabsContent>
         
