@@ -158,11 +158,25 @@ export async function POST(request: NextRequest) {
     let cardId: string | null = null;
     let cardLast4: string | null = null;
 
-    // Check if auto_link_cards is enabled (default: true)
-    const autoLinkConfig = await prisma.checkoutConfig.findUnique({
-      where: { key: "auto_link_cards" },
-    });
+    // Check config settings
+    const [autoLinkConfig, amexOnlyConfig] = await Promise.all([
+      prisma.checkoutConfig.findUnique({ where: { key: "auto_link_cards" } }),
+      prisma.checkoutConfig.findUnique({ where: { key: "amex_only" } }),
+    ]);
     const autoLinkCards = autoLinkConfig?.value !== "false";
+    const amexOnly = amexOnlyConfig?.value === "true";
+
+    // Build card filter based on amex_only setting
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const baseCardFilter: any = {
+      deletedAt: null,
+      checkoutStatus: "AVAILABLE",
+    };
+    if (amexOnly) {
+      baseCardFilter.tags = {
+        some: { name: { equals: "amex", mode: "insensitive" } },
+      };
+    }
 
     if (accountEmail) {
       // Try to find existing account
@@ -170,12 +184,10 @@ export async function POST(request: NextRequest) {
         where: { email: accountEmail.toLowerCase() },
         include: {
           cards: {
-            where: {
-              deletedAt: null,
-              checkoutStatus: "AVAILABLE",
-            },
+            where: baseCardFilter,
             orderBy: { createdAt: "asc" },
             take: 1,
+            include: { tags: true },
           },
         },
       });
@@ -189,12 +201,10 @@ export async function POST(request: NextRequest) {
           },
           include: {
             cards: {
-              where: {
-                deletedAt: null,
-                checkoutStatus: "AVAILABLE",
-              },
+              where: baseCardFilter,
               orderBy: { createdAt: "asc" },
               take: 1,
+              include: { tags: true },
             },
           },
         });
@@ -203,18 +213,17 @@ export async function POST(request: NextRequest) {
       if (account) {
         accountId = account.id;
 
-        // If account has linked cards, use the first available one
+        // If account has matching cards, use the first one
         if (account.cards.length > 0) {
           const card = account.cards[0];
           cardId = card.id;
           cardLast4 = card.cardNumber.slice(-4);
         } else if (autoLinkCards) {
-          // Account has no cards - find an unlinked available card and link it
+          // Account has no matching cards - find an unlinked card that matches filter and link it
           const availableCard = await prisma.card.findFirst({
             where: {
               accountId: null,
-              checkoutStatus: "AVAILABLE",
-              deletedAt: null,
+              ...baseCardFilter,
             },
             orderBy: { createdAt: "asc" },
           });
@@ -232,12 +241,11 @@ export async function POST(request: NextRequest) {
         }
       }
     } else if (autoLinkCards) {
-      // No email provided - just find any available unlinked card
+      // No email provided - just find any available unlinked card matching filter
       const availableCard = await prisma.card.findFirst({
         where: {
           accountId: null,
-          checkoutStatus: "AVAILABLE",
-          deletedAt: null,
+          ...baseCardFilter,
         },
         orderBy: { createdAt: "asc" },
       });

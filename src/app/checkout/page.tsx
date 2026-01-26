@@ -185,6 +185,7 @@ interface CheckoutConfig {
   success_timeout?: number;
   max_retries?: number;
   auto_link_cards?: boolean;
+  amex_only?: boolean;
   worker_parallelism?: number;
   discord_webhook_success?: string;
   discord_webhook_error?: string;
@@ -241,7 +242,8 @@ export default function CheckoutPage() {
   
   // UI state
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set());
+  const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set()); // For import tab
+  const [selectedQueueJobs, setSelectedQueueJobs] = useState<Set<string>>(new Set()); // For job queue multi-select
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
@@ -1023,19 +1025,53 @@ export default function CheckoutPage() {
                   <CardTitle>Job Queue</CardTitle>
                   <CardDescription>Live view of checkout jobs</CardDescription>
                 </div>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-40">
-                    <SelectValue placeholder="Filter status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Status</SelectItem>
-                    <SelectItem value="QUEUED">Queued</SelectItem>
-                    <SelectItem value="RUNNING">Running</SelectItem>
-                    <SelectItem value="SUCCESS">Success</SelectItem>
-                    <SelectItem value="FAILED">Failed</SelectItem>
-                    <SelectItem value="NEEDS_REVIEW">Needs Review</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                  {/* Bulk actions when jobs are selected */}
+                  {selectedQueueJobs.size > 0 && (
+                    <>
+                      <Badge variant="outline">{selectedQueueJobs.size} selected</Badge>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleBulkRetry}
+                        disabled={isControlLoading !== null}
+                      >
+                        {isControlLoading === "bulk_retry" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
+                        Retry Selected
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleBulkCancel}
+                        disabled={isControlLoading !== null}
+                      >
+                        {isControlLoading === "bulk_cancel" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <X className="w-4 h-4 mr-1" />}
+                        Cancel Selected
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={clearQueueSelection}>
+                        Clear
+                      </Button>
+                    </>
+                  )}
+                  {selectedQueueJobs.size === 0 && jobs.length > 0 && (
+                    <Button variant="ghost" size="sm" onClick={selectAllQueueJobs}>
+                      Select All
+                    </Button>
+                  )}
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="w-40">
+                      <SelectValue placeholder="Filter status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Status</SelectItem>
+                      <SelectItem value="QUEUED">Queued</SelectItem>
+                      <SelectItem value="RUNNING">Running</SelectItem>
+                      <SelectItem value="SUCCESS">Success</SelectItem>
+                      <SelectItem value="FAILED">Failed</SelectItem>
+                      <SelectItem value="NEEDS_REVIEW">Needs Review</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -1049,6 +1085,20 @@ export default function CheckoutPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-8">
+                        <input
+                          type="checkbox"
+                          className="rounded border-gray-300"
+                          checked={selectedQueueJobs.size === jobs.length && jobs.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              selectAllQueueJobs();
+                            } else {
+                              clearQueueSelection();
+                            }
+                          }}
+                        />
+                      </TableHead>
                       <TableHead className="w-8"></TableHead>
                       <TableHead>Event</TableHead>
                       <TableHead>Section/Row</TableHead>
@@ -1061,7 +1111,25 @@ export default function CheckoutPage() {
                   <TableBody>
                     {jobs.map((job) => (
                       <React.Fragment key={job.id}>
-                        <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}>
+                        <TableRow className={`cursor-pointer hover:bg-muted/50 ${selectedQueueJobs.has(job.id) ? "bg-blue-50" : ""}`} onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              className="rounded border-gray-300"
+                              checked={selectedQueueJobs.has(job.id)}
+                              onChange={() => {
+                                setSelectedQueueJobs(prev => {
+                                  const newSet = new Set(prev);
+                                  if (newSet.has(job.id)) {
+                                    newSet.delete(job.id);
+                                  } else {
+                                    newSet.add(job.id);
+                                  }
+                                  return newSet;
+                                });
+                              }}
+                            />
+                          </TableCell>
                           <TableCell>
                             {expandedJobId === job.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                           </TableCell>
@@ -1097,8 +1165,8 @@ export default function CheckoutPage() {
                                   <RefreshCw className="w-4 h-4 text-blue-500" />
                                 </Button>
                               )}
-                              {job.status === "QUEUED" && (
-                                <Button variant="ghost" size="icon" title="Cancel" onClick={(e) => { e.stopPropagation(); handleCancelJob(job.id); }}>
+                              {(job.status === "QUEUED" || job.status === "RUNNING") && (
+                                <Button variant="ghost" size="icon" title={job.status === "RUNNING" ? "Skip" : "Cancel"} onClick={(e) => { e.stopPropagation(); handleCancelJob(job.id); }}>
                                   <X className="w-4 h-4" />
                                 </Button>
                               )}
@@ -1112,7 +1180,7 @@ export default function CheckoutPage() {
                         </TableRow>
                         {expandedJobId === job.id && (
                           <TableRow>
-                            <TableCell colSpan={7} className="bg-muted/30">
+                            <TableCell colSpan={8} className="bg-muted/30">
                               <div className="p-4 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
                                 <div>
                                   <Label className="text-xs text-muted-foreground">Account Email</Label>
@@ -1374,6 +1442,16 @@ export default function CheckoutPage() {
                   <Switch
                     checked={config.auto_link_cards !== false}
                     onCheckedChange={(checked) => updateConfig({ auto_link_cards: checked })}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Amex Only</Label>
+                    <p className="text-xs text-muted-foreground">Only use cards tagged as &quot;amex&quot; for checkouts</p>
+                  </div>
+                  <Switch
+                    checked={config.amex_only === true}
+                    onCheckedChange={(checked) => updateConfig({ amex_only: checked })}
                   />
                 </div>
                 <div className="flex items-center justify-between">

@@ -16,6 +16,7 @@ const CONFIG_KEYS = [
   // Worker settings
   "max_retries",
   "auto_link_cards", // boolean
+  "amex_only", // boolean - only use cards tagged as "amex"
   "worker_parallelism", // number of parallel workers
   
   // Discord webhooks for notifications
@@ -64,6 +65,7 @@ export async function GET() {
       // Worker defaults
       max_retries: 3,
       auto_link_cards: true,
+      amex_only: false,
       worker_parallelism: 1,
       
       // Webhook defaults
