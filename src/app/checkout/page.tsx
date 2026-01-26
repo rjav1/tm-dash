@@ -774,11 +774,11 @@ export default function CheckoutPage() {
               Listener Offline
             </Badge>
           )}
-          {/* Worker status - primary indicator */}
+          {/* Worker status - primary indicator (show total threads, not just daemons) */}
           {hasActiveWorkers ? (
             <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
               <Activity className="w-3 h-3 mr-1" />
-              Workers ({stats?.workers?.runs?.filter(w => !w.isStale).length || 0})
+              Workers ({stats?.workers?.runs?.filter((w: WorkerRun) => !w.isStale).reduce((sum: number, w: WorkerRun) => sum + (w.activeWorkerCount || 1), 0) || 0})
             </Badge>
           ) : stats?.workers?.runs && stats.workers.runs.length > 0 ? (
             <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
@@ -924,81 +924,88 @@ export default function CheckoutPage() {
           )}
           
           {/* Active Workers Panel */}
-          {stats?.workers?.runs && stats.workers.runs.length > 0 && (
-            <Card className={`mb-4 ${hasActiveWorkers ? "border-green-200" : "border-yellow-200"}`}>
-              <CardHeader className="pb-2">
-                <CardTitle className={`flex items-center gap-2 ${hasActiveWorkers ? "text-green-700" : "text-yellow-700"}`}>
-                  <Activity className="w-5 h-5" />
-                  {hasActiveWorkers ? `Active Workers (${stats.workers.runs.filter(w => !w.isStale).length})` : "Workers (Stale)"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-3">
-                  {stats.workers.runs.map((worker: WorkerRun) => (
-                    <div key={worker.id} className={`flex items-center justify-between p-3 rounded-lg ${worker.isStale ? "bg-yellow-50 border border-yellow-200" : "bg-muted/50"}`}>
-                      <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2">
-                          {worker.isStale ? (
-                            <div className="w-2 h-2 bg-yellow-500 rounded-full" title="Worker may be disconnected" />
-                          ) : (
-                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                          )}
-                          <span className="font-mono text-sm font-medium">{worker.workerId}</span>
-                          {worker.activeWorkerCount && worker.activeWorkerCount > 1 && !worker.isStale && (
-                            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">
-                              {worker.activeWorkerCount} threads
-                            </Badge>
-                          )}
-                          {worker.isStale && (
-                            <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs">
-                              <AlertCircle className="w-3 h-3 mr-1" />
-                              Stale
-                            </Badge>
-                          )}
+          {stats?.workers?.runs && stats.workers.runs.length > 0 && (() => {
+            // Calculate total worker threads across all daemons
+            const totalThreads = stats.workers.runs
+              .filter((w: WorkerRun) => !w.isStale)
+              .reduce((sum: number, w: WorkerRun) => sum + (w.activeWorkerCount || 1), 0);
+            
+            return (
+              <Card className={`mb-4 ${hasActiveWorkers ? "border-green-200" : "border-yellow-200"}`}>
+                <CardHeader className="pb-2">
+                  <CardTitle className={`flex items-center gap-2 ${hasActiveWorkers ? "text-green-700" : "text-yellow-700"}`}>
+                    <Activity className="w-5 h-5" />
+                    {hasActiveWorkers ? `Active Workers (${totalThreads})` : "Workers (Stale)"}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-3">
+                    {stats.workers.runs.map((worker: WorkerRun) => (
+                      <div key={worker.id} className={`flex items-center justify-between p-3 rounded-lg ${worker.isStale ? "bg-yellow-50 border border-yellow-200" : "bg-muted/50"}`}>
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2">
+                            {worker.isStale ? (
+                              <div className="w-2 h-2 bg-yellow-500 rounded-full" title="Worker may be disconnected" />
+                            ) : (
+                              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                            )}
+                            <span className="font-mono text-sm font-medium">{worker.workerId}</span>
+                            {!worker.isStale && (
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">
+                                {worker.activeWorkerCount || 1} worker{(worker.activeWorkerCount || 1) > 1 ? "s" : ""}
+                              </Badge>
+                            )}
+                            {worker.isStale && (
+                              <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs">
+                                <AlertCircle className="w-3 h-3 mr-1" />
+                                Stale
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-sm">
+                            {worker.currentJob ? (
+                              <div className="flex items-center gap-2">
+                                <Loader2 className="w-3 h-3 animate-spin text-yellow-600" />
+                                <span className="font-medium">{worker.currentJob.eventName || "Processing..."}</span>
+                                {worker.currentJob.section && (
+                                  <span className="text-muted-foreground">({worker.currentJob.section}/{worker.currentJob.row})</span>
+                                )}
+                                {worker.currentJob.cardLast4 && (
+                                  <Badge variant="outline" className="text-xs">****{worker.currentJob.cardLast4}</Badge>
+                                )}
+                                {worker.currentJob.status && (
+                                  <span className="text-xs text-muted-foreground italic">{worker.currentJob.status}</span>
+                                )}
+                              </div>
+                            ) : worker.isStale ? (
+                              <span className="text-yellow-600">
+                                No heartbeat {worker.lastHeartbeat ? `since ${formatExactTime(worker.lastHeartbeat)}` : "- never connected"}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">Idle - waiting for jobs</span>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-sm">
-                          {worker.currentJob ? (
-                            <div className="flex items-center gap-2">
-                              <Loader2 className="w-3 h-3 animate-spin text-yellow-600" />
-                              <span className="font-medium">{worker.currentJob.eventName || "Processing..."}</span>
-                              {worker.currentJob.section && (
-                                <span className="text-muted-foreground">({worker.currentJob.section}/{worker.currentJob.row})</span>
-                              )}
-                              {worker.currentJob.cardLast4 && (
-                                <Badge variant="outline" className="text-xs">****{worker.currentJob.cardLast4}</Badge>
-                              )}
-                              {worker.currentJob.status && (
-                                <span className="text-xs text-muted-foreground italic">{worker.currentJob.status}</span>
-                              )}
-                            </div>
-                          ) : worker.isStale ? (
-                            <span className="text-yellow-600">
-                              No heartbeat {worker.lastHeartbeat ? `since ${formatExactTime(worker.lastHeartbeat)}` : "- never connected"}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">Idle - waiting for jobs</span>
-                          )}
+                        <div className="flex items-center gap-4 text-sm">
+                          <div className="flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-green-600" />
+                            <span className="text-green-600">{worker.jobsSuccess}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <XCircle className="w-3 h-3 text-red-600" />
+                            <span className="text-red-600">{worker.jobsFailed}</span>
+                          </div>
+                          <span className="text-muted-foreground text-xs" title={`Started: ${formatExactTime(worker.startedAt)}`}>
+                            last seen {worker.lastHeartbeat ? formatExactTime(worker.lastHeartbeat) : "never"}
+                          </span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-4 text-sm">
-                        <div className="flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-green-600" />
-                          <span className="text-green-600">{worker.jobsSuccess}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <XCircle className="w-3 h-3 text-red-600" />
-                          <span className="text-red-600">{worker.jobsFailed}</span>
-                        </div>
-                        <span className="text-muted-foreground text-xs">
-                          since {formatExactTime(worker.startedAt)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
           
           {/* Control Panel */}
           <Card className={`mb-4 ${isOffline ? "opacity-60" : ""}`}>
