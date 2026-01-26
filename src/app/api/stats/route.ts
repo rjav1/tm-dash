@@ -162,8 +162,23 @@ export async function GET() {
     // ===============================
     // PROFIT CALCULATIONS
     // ===============================
+    // Get marketplace fee setting for net payout calculation
+    let marketplaceFeePercentage = 7; // Default 7%
+    try {
+      const feeSetting = await prisma.setting.findUnique({
+        where: { key: "marketplace_fee_percentage" },
+      });
+      if (feeSetting) {
+        marketplaceFeePercentage = parseFloat(feeSetting.value);
+      }
+    } catch {
+      // Settings table might not exist, use default
+    }
+    const feeMultiplier = 1 - (marketplaceFeePercentage / 100); // e.g., 0.93 for 7%
+
     // Realized profit: from completed sales
-    // Use the same logic as SalesSync.getSalesStats() for consistency
+    // IMPORTANT: Do NOT use invoice.totalAmount per sale - that's the ENTIRE invoice total
+    // which may contain multiple sales. Use salePrice * feeMultiplier instead.
     const salesWithData = await prisma.sale.findMany({
       where: { 
         OR: [
@@ -171,10 +186,13 @@ export async function GET() {
           { status: 1 }, // Status 1 = Complete/Delivered in TicketVault
         ],
       },
-      include: {
-        invoice: true,
+      select: {
+        salePrice: true,
+        cost: true,
+        quantity: true,
         listing: { 
-          include: { 
+          select: { 
+            cost: true,
             purchase: {
               select: { priceEach: true },
             },
@@ -186,9 +204,11 @@ export async function GET() {
     let realizedRevenue = 0;
     let realizedCost = 0;
     salesWithData.forEach((sale) => {
-      // Revenue: Use invoice totalAmount (net payout after fees) if available, else salePrice
-      // salePrice is already the TOTAL sale price for all tickets in the sale
-      const netPayout = sale.invoice?.totalAmount?.toNumber() || sale.salePrice?.toNumber() || 0;
+      // Revenue: salePrice is GROSS (total for this sale before fees)
+      // Apply marketplace fee to get net payout per sale
+      // DO NOT use invoice.totalAmount - that's for entire invoice which may have multiple sales!
+      const grossSalePrice = sale.salePrice?.toNumber() || 0;
+      const netPayout = grossSalePrice * feeMultiplier;
       realizedRevenue += netPayout;
       
       // Cost: sale.cost, listing.cost, or purchase.priceEach are all PER-TICKET costs

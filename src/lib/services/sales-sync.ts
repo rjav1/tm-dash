@@ -529,8 +529,26 @@ export async function syncAllFromPos(): Promise<{
  * - Status 1 = Complete/Delivered
  * - Status 40 = Alert (confirmed, awaiting delivery)
  * - Status 20 = Pending (not confirmed)
+ * 
+ * IMPORTANT: invoice.totalAmount is for the ENTIRE invoice (which can contain multiple sales).
+ * We must NOT use invoice.totalAmount per sale, or we'll double-count.
+ * Instead, use sale.salePrice (gross) and apply marketplace fee to get net payout.
  */
 export async function getSalesStats(): Promise<SalesStats> {
+  // Get marketplace fee setting
+  let marketplaceFeePercentage = 7; // Default 7%
+  try {
+    const feeSetting = await prisma.setting.findUnique({
+      where: { key: "marketplace_fee_percentage" },
+    });
+    if (feeSetting) {
+      marketplaceFeePercentage = parseFloat(feeSetting.value);
+    }
+  } catch {
+    // Settings table might not exist, use default
+  }
+  const feeMultiplier = 1 - (marketplaceFeePercentage / 100); // e.g., 0.93 for 7%
+
   const [totalSales, pendingSales, completedSales, salesWithData] =
     await Promise.all([
       prisma.sale.count(),
@@ -569,11 +587,6 @@ export async function getSalesStats(): Promise<SalesStats> {
               },
             },
           },
-          invoice: {
-            select: {
-              totalAmount: true,
-            },
-          },
         },
       }),
     ]);
@@ -584,11 +597,15 @@ export async function getSalesStats(): Promise<SalesStats> {
   const uniqueDays = new Set<string>();
   
   for (const sale of salesWithData) {
-    // Use invoice totalAmount (net payout after fees) if available, else salePrice
-    const netPayout = Number(sale.invoice?.totalAmount || sale.salePrice || 0);
+    // Revenue: sale.salePrice is GROSS (total for this sale before fees)
+    // Apply marketplace fee to get net payout per sale
+    // DO NOT use invoice.totalAmount - that's for the entire invoice which may have multiple sales!
+    const grossSalePrice = Number(sale.salePrice || 0);
+    const netPayout = grossSalePrice * feeMultiplier;
     totalRevenue += netPayout;
     
     // Cost priority: sale.cost > listing.cost > purchase.priceEach
+    // These are all PER-TICKET costs, so multiply by quantity
     const unitCost = Number(sale.cost || sale.listing?.cost || sale.listing?.purchase?.priceEach || 0);
     const saleTotalCost = unitCost * (sale.quantity || 1);
     totalCost += saleTotalCost;
