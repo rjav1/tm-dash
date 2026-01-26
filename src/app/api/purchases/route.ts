@@ -737,18 +737,19 @@ export async function GET(request: NextRequest) {
       for (const listing of listings) {
         for (const sale of listing.sales) {
           soldQuantity += sale.quantity;
-          actualRevenue += Number(sale.salePrice) * sale.quantity;
+          // NOTE: sale.salePrice is already the TOTAL sale price for all tickets in this sale
+          // (from TicketVault's Total field), so do NOT multiply by quantity
+          actualRevenue += Number(sale.salePrice);
           
           // Use invoice totalAmount (net payout after marketplace fees) when available
           if (sale.invoice) {
-            // Invoice totalAmount is already net of fees for the invoice
-            // But we need to prorate for this sale's portion
-            // For simplicity, use salePrice and apply our known fee rate
-            actualPayout += Number(sale.salePrice) * sale.quantity * feeMultiplier;
+            // Invoice totalAmount is the net payout after fees
+            // salePrice is already total, so apply fee rate directly
+            actualPayout += Number(sale.salePrice) * feeMultiplier;
             payoutStatus = sale.invoice.payoutStatus || payoutStatus;
           } else {
             // No invoice yet, estimate payout
-            actualPayout += Number(sale.salePrice) * sale.quantity * feeMultiplier;
+            actualPayout += Number(sale.salePrice) * feeMultiplier;
           }
           
           if (sale.saleDate && (!saleDate || sale.saleDate > saleDate)) {

@@ -162,38 +162,68 @@ export async function GET() {
     // ===============================
     // PROFIT CALCULATIONS
     // ===============================
-    // Realized profit: from completed sales with invoices
-    const salesWithInvoices = await prisma.sale.findMany({
-      where: { isComplete: true },
+    // Realized profit: from completed sales
+    // Use the same logic as SalesSync.getSalesStats() for consistency
+    const salesWithData = await prisma.sale.findMany({
+      where: { 
+        OR: [
+          { isComplete: true },
+          { status: 1 }, // Status 1 = Complete/Delivered in TicketVault
+        ],
+      },
       include: {
         invoice: true,
-        listing: { include: { purchase: true } },
+        listing: { 
+          include: { 
+            purchase: {
+              select: { priceEach: true },
+            },
+          },
+        },
       },
     });
 
     let realizedRevenue = 0;
     let realizedCost = 0;
-    salesWithInvoices.forEach((sale) => {
-      realizedRevenue += sale.salePrice?.toNumber() || 0;
-      realizedCost += sale.cost?.toNumber() || 0;
+    salesWithData.forEach((sale) => {
+      // Revenue: Use invoice totalAmount (net payout after fees) if available, else salePrice
+      // salePrice is already the TOTAL sale price for all tickets in the sale
+      const netPayout = sale.invoice?.totalAmount?.toNumber() || sale.salePrice?.toNumber() || 0;
+      realizedRevenue += netPayout;
+      
+      // Cost: sale.cost, listing.cost, or purchase.priceEach are all PER-TICKET costs
+      // Must multiply by quantity to get total cost
+      const unitCost = sale.cost?.toNumber() || 
+                       sale.listing?.cost?.toNumber() || 
+                       sale.listing?.purchase?.priceEach?.toNumber() || 0;
+      const saleTotalCost = unitCost * (sale.quantity || 1);
+      realizedCost += saleTotalCost;
     });
     const realizedProfit = realizedRevenue - realizedCost;
 
-    // Unrealized profit: estimated from unsold listings using comparison prices
+    // Unrealized profit: estimated from unsold listings
+    // listing.price and listing.cost are TOTAL values (price * quantity already factored in)
     const unsoldListings = await prisma.listing.findMany({
       where: {
         sales: { none: {} },
       },
-      include: {
-        purchase: true,
+      select: {
+        price: true,
+        cost: true,
+        quantity: true,
       },
     });
 
     let unrealizedRevenue = 0;
     let unrealizedCost = 0;
     unsoldListings.forEach((listing) => {
-      unrealizedRevenue += listing.price?.toNumber() || 0;
-      unrealizedCost += listing.cost?.toNumber() || 0;
+      // listing.price is the listing price per ticket, listing.cost is cost per ticket
+      // Need to multiply by quantity to get totals
+      const listingPrice = listing.price?.toNumber() || 0;
+      const listingCost = listing.cost?.toNumber() || 0;
+      const qty = listing.quantity || 1;
+      unrealizedRevenue += listingPrice * qty;
+      unrealizedCost += listingCost * qty;
     });
     const unrealizedProfit = unrealizedRevenue - unrealizedCost;
 
