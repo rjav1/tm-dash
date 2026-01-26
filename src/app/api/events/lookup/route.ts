@@ -1,11 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
-import { TicketmasterEvent } from "@/lib/services/ticketmaster";
+import { TicketmasterEvent, findMatchingEvent } from "@/lib/services/ticketmaster";
 import { getGetInPrice, VividSeatsPrice } from "@/lib/services/vivid-seats-scraper";
 import { scrapeEventPageFetch, ScrapedEventData } from "@/lib/services/ticketmaster-fetch-scraper";
 
 // Use fetch-based scraper (works on Vercel) instead of Puppeteer-based one
 const scrapeEventPage = scrapeEventPageFetch;
+
+/**
+ * Helper to parse a date string into YYYY-MM-DD format for Discovery API
+ */
+function parseDateToISO(dateStr: string): string | null {
+  if (!dateStr) return null;
+  
+  // Try parsing various date formats
+  const cleanDate = dateStr
+    .replace(/\bat\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  
+  try {
+    const parsed = new Date(cleanDate);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().split("T")[0];
+    }
+  } catch {
+    // Try regex extraction for formats like "September 12, 2026"
+    const match = dateStr.match(/(\w+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (match) {
+      const months: Record<string, string> = {
+        january: "01", february: "02", march: "03", april: "04",
+        may: "05", june: "06", july: "07", august: "08",
+        september: "09", october: "10", november: "11", december: "12",
+      };
+      const month = months[match[1].toLowerCase()];
+      if (month) {
+        const day = match[2].padStart(2, "0");
+        return `${match[3]}-${month}-${day}`;
+      }
+    }
+  }
+  return null;
+}
 
 export interface EventLookupRequest {
   eventId?: string;        // TM internal event ID (from queue/Discord webhook)
@@ -138,13 +174,71 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Step 2c: If we have event info from DB/checkout jobs, try Discovery API for better data
+    let tmEvent: TicketmasterEvent | null = null;
+    if (searchArtist && !scrapedData?.eventName) {
+      console.log(`[Lookup] Trying Discovery API for: ${searchArtist}`);
+      try {
+        const isoDate = searchDate ? parseDateToISO(searchDate) : undefined;
+        tmEvent = await findMatchingEvent({
+          artistName: searchArtist,
+          venue: searchVenue || undefined,
+          date: isoDate || undefined,
+        });
+        
+        if (tmEvent) {
+          source = "api";
+          console.log(`[Lookup] Found via Discovery API: ${tmEvent.name}`);
+          
+          // Create scraped data from Discovery API result
+          scrapedData = {
+            eventName: tmEvent.name,
+            artistName: tmEvent.name.split(" - ")[0].split(":")[0].trim(),
+            venue: tmEvent.venue?.name || null,
+            venueCity: tmEvent.venue?.city || null,
+            venueState: tmEvent.venue?.stateCode || null,
+            date: tmEvent.date || null,
+            time: tmEvent.time || null,
+            dayOfWeek: null,
+            url: tmEvent.url || `https://www.ticketmaster.com/event/${eventId}`,
+            scrapedAt: new Date().toISOString(),
+          };
+          
+          // Format the date nicely
+          if (tmEvent.date) {
+            try {
+              const dateObj = new Date(tmEvent.date + "T12:00:00");
+              const formatted = dateObj.toLocaleDateString("en-US", {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              });
+              scrapedData.date = formatted;
+              if (tmEvent.time) {
+                const timeFormatted = new Date(`2000-01-01T${tmEvent.time}`).toLocaleTimeString("en-US", {
+                  hour: "numeric",
+                  minute: "2-digit",
+                });
+                scrapedData.date += ` at ${timeFormatted}`;
+                scrapedData.time = timeFormatted;
+              }
+            } catch {
+              // Keep raw date
+            }
+          }
+        }
+      } catch (apiError) {
+        console.error("[Lookup] Discovery API error:", apiError);
+      }
+    }
+
     // Step 3: If we still don't have artist name, return error with helpful message
     if (!searchArtist) {
       return NextResponse.json(
         {
           success: false,
           source,
-          ticketmaster: null,
+          ticketmaster: tmEvent,
           scraped: scrapedData,
           vividSeats: null,
           searchParams: { artistName: null, venue: searchVenue, date: searchDate },
@@ -154,11 +248,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Step 4: Skip Discovery API search - scraping gives us better data
-    // The Discovery API often returns wrong results (tribute bands, etc.)
-    const tmEvent: TicketmasterEvent | null = null;
-
-    // Step 5: Scrape Vivid Seats for pricing (if enabled)
+    // Step 4: Scrape Vivid Seats for pricing (if enabled)
     let vsPrice: VividSeatsPrice | null = null;
     
     if (includeVividSeats) {
@@ -181,7 +271,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 6: Return combined response
+    // Step 5: Return combined response
     const response: EventLookupResponse = {
       success: scrapedData?.eventName !== null,
       source,
@@ -316,12 +406,66 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Step 2c: If we have event info, try Discovery API for better data
+    let tmEvent: TicketmasterEvent | null = null;
+    if (searchArtist && !scrapedData?.eventName) {
+      console.log(`[Lookup GET] Trying Discovery API for: ${searchArtist}`);
+      try {
+        const isoDate = searchDate ? parseDateToISO(searchDate) : undefined;
+        tmEvent = await findMatchingEvent({
+          artistName: searchArtist,
+          venue: searchVenue || undefined,
+          date: isoDate || undefined,
+        });
+        
+        if (tmEvent) {
+          source = "api";
+          scrapedData = {
+            eventName: tmEvent.name,
+            artistName: tmEvent.name.split(" - ")[0].split(":")[0].trim(),
+            venue: tmEvent.venue?.name || null,
+            venueCity: tmEvent.venue?.city || null,
+            venueState: tmEvent.venue?.stateCode || null,
+            date: tmEvent.date || null,
+            time: tmEvent.time || null,
+            dayOfWeek: null,
+            url: tmEvent.url || `https://www.ticketmaster.com/event/${eventId}`,
+            scrapedAt: new Date().toISOString(),
+          };
+          
+          if (tmEvent.date) {
+            try {
+              const dateObj = new Date(tmEvent.date + "T12:00:00");
+              const formatted = dateObj.toLocaleDateString("en-US", {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              });
+              scrapedData.date = formatted;
+              if (tmEvent.time) {
+                const timeFormatted = new Date(`2000-01-01T${tmEvent.time}`).toLocaleTimeString("en-US", {
+                  hour: "numeric",
+                  minute: "2-digit",
+                });
+                scrapedData.date += ` at ${timeFormatted}`;
+                scrapedData.time = timeFormatted;
+              }
+            } catch {
+              // Keep raw date
+            }
+          }
+        }
+      } catch (apiError) {
+        console.error("[Lookup GET] Discovery API error:", apiError);
+      }
+    }
+
     if (!searchArtist) {
       return NextResponse.json(
         {
           success: false,
           source,
-          ticketmaster: null,
+          ticketmaster: tmEvent,
           scraped: scrapedData,
           vividSeats: null,
           searchParams: { artistName: null, venue: searchVenue, date: searchDate },
@@ -330,9 +474,6 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
-
-    // Skip Discovery API - scraping is more reliable
-    const tmEvent: TicketmasterEvent | null = null;
 
     // Scrape Vivid Seats
     let vsPrice: VividSeatsPrice | null = null;
