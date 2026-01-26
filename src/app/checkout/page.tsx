@@ -141,6 +141,21 @@ interface WorkerRun {
   } | null;
 }
 
+interface WorkerThread {
+  id: string;
+  runId: string;
+  workerName: string;
+  deviceName: string;
+  status: string; // IDLE, PROCESSING, PAUSED, STOPPED
+  currentJobId?: string | null;
+  currentEvent?: string | null;
+  lastHeartbeat: string;
+  startedAt: string;
+  jobsCompleted: number;
+  jobsFailed: number;
+  isStale?: boolean;
+}
+
 interface CheckoutStats {
   period: string;
   overview: {
@@ -159,7 +174,9 @@ interface CheckoutStats {
   };
   workers: {
     active: number;
+    totalThreads?: number;
     runs: WorkerRun[];
+    threads?: WorkerThread[];
     runningJobs?: number;
   };
   listener: {
@@ -437,6 +454,18 @@ export default function CheckoutPage() {
           fetchRuns();
         }
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "checkout_workers",
+        },
+        () => {
+          // Refetch stats when individual worker status changes
+          fetchStats();
+        }
+      )
       .subscribe((status) => {
         setIsRealtimeConnected(status === "SUBSCRIBED");
       });
@@ -449,6 +478,21 @@ export default function CheckoutPage() {
       }
     };
   }, [fetchJobs, fetchStats, fetchRuns]);
+  
+  // Fallback polling when realtime is not connected
+  // This ensures dashboard updates even if Supabase Realtime isn't working
+  useEffect(() => {
+    // Skip polling if realtime is connected
+    if (isRealtimeConnected) return;
+    
+    // Poll every 5 seconds as fallback
+    const interval = setInterval(() => {
+      fetchJobs();
+      fetchStats();
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [isRealtimeConnected, fetchJobs, fetchStats]);
   
   // Import handlers
   const handleImportSelected = async () => {
@@ -804,9 +848,14 @@ export default function CheckoutPage() {
   
   // Compute if any workers are truly online (connected and not stale)
   const hasActiveWorkers = useMemo(() => {
+    // Prefer threads if available
+    if (stats?.workers?.threads && stats.workers.threads.length > 0) {
+      return stats.workers.threads.some((t: WorkerThread) => !t.isStale);
+    }
+    // Fallback to runs
     if (!stats?.workers?.runs) return false;
-    return stats.workers.runs.some(w => !w.isStale);
-  }, [stats?.workers?.runs]);
+    return stats.workers.runs.some((w: WorkerRun) => !w.isStale);
+  }, [stats?.workers?.threads, stats?.workers?.runs]);
   
   // Controls are disabled only if NO workers are active
   // (Realtime connection is just for live updates, not worker availability)
@@ -845,9 +894,9 @@ export default function CheckoutPage() {
           {hasActiveWorkers ? (
             <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
               <Activity className="w-3 h-3 mr-1" />
-              Workers ({stats?.workers?.runs?.filter((w: WorkerRun) => !w.isStale).reduce((sum: number, w: WorkerRun) => sum + (w.activeWorkerCount || 1), 0) || 0})
+              Workers ({stats?.workers?.threads?.filter((t: WorkerThread) => !t.isStale).length || stats?.workers?.runs?.filter((w: WorkerRun) => !w.isStale).reduce((sum: number, w: WorkerRun) => sum + (w.activeWorkerCount || 1), 0) || 0})
             </Badge>
-          ) : stats?.workers?.runs && stats.workers.runs.length > 0 ? (
+          ) : (stats?.workers?.runs && stats.workers.runs.length > 0) || (stats?.workers?.threads && stats.workers.threads.length > 0) ? (
             <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
               <WifiOff className="w-3 h-3 mr-1" />Workers Stale
             </Badge>
@@ -856,8 +905,18 @@ export default function CheckoutPage() {
               <WifiOff className="w-3 h-3 mr-1" />No Workers
             </Badge>
           )}
-          {/* Supabase realtime connection - secondary indicator */}
-          <span className={`w-2 h-2 rounded-full ${isRealtimeConnected ? "bg-green-500" : "bg-gray-300"}`} title={isRealtimeConnected ? "Realtime connected" : "Realtime disconnected"} />
+          {/* Supabase realtime connection indicator */}
+          {isRealtimeConnected ? (
+            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5 animate-pulse" />
+              Live
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-200 text-xs" title="Realtime not connected, polling every 5s">
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-400 mr-1.5" />
+              Polling
+            </Badge>
+          )}
         </div>
       </div>
       
@@ -1052,81 +1111,150 @@ export default function CheckoutPage() {
               )}
             </Card>
           )}
-          {/* Active Workers Panel */}
-          {stats?.workers?.runs && stats.workers.runs.length > 0 && (() => {
-            // Calculate total worker threads across all daemons
-            const totalThreads = stats.workers.runs
-              .filter((w: WorkerRun) => !w.isStale)
-              .reduce((sum: number, w: WorkerRun) => sum + (w.activeWorkerCount || 1), 0);
+          {/* Active Workers Panel - Individual Threads */}
+          {(() => {
+            const threads = stats?.workers?.threads || [];
+            const activeThreads = threads.filter((t: WorkerThread) => !t.isStale);
+            const hasThreads = threads.length > 0;
+            
+            // Group threads by device name
+            const groupedThreads: Record<string, WorkerThread[]> = {};
+            threads.forEach((t: WorkerThread) => {
+              if (!groupedThreads[t.deviceName]) {
+                groupedThreads[t.deviceName] = [];
+              }
+              groupedThreads[t.deviceName].push(t);
+            });
+            
+            // Fallback to old run-based display if no threads data
+            if (!hasThreads && stats?.workers?.runs && stats.workers.runs.length > 0) {
+              const totalThreads = stats.workers.runs
+                .filter((w: WorkerRun) => !w.isStale)
+                .reduce((sum: number, w: WorkerRun) => sum + (w.activeWorkerCount || 1), 0);
+              
+              return (
+                <Card className={`mb-4 ${hasActiveWorkers ? "border-green-200" : "border-yellow-200"}`}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className={`flex items-center gap-2 ${hasActiveWorkers ? "text-green-700" : "text-yellow-700"}`}>
+                      <Activity className="w-5 h-5" />
+                      {hasActiveWorkers ? `Active Workers (${totalThreads})` : "Workers (Stale)"}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid gap-3">
+                      {stats.workers.runs.map((worker: WorkerRun) => (
+                        <div key={worker.id} className={`flex items-center justify-between p-3 rounded-lg ${worker.isStale ? "bg-yellow-50 border border-yellow-200" : "bg-muted/50"}`}>
+                          <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2">
+                              {worker.isStale ? (
+                                <div className="w-2 h-2 bg-yellow-500 rounded-full" title="Worker may be disconnected" />
+                              ) : (
+                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                              )}
+                              <span className="font-mono text-sm font-medium">{worker.workerId}</span>
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">
+                                {worker.activeWorkerCount || 1} thread{(worker.activeWorkerCount || 1) > 1 ? "s" : ""}
+                              </Badge>
+                            </div>
+                            <span className="text-muted-foreground text-sm">
+                              {worker.currentJob?.eventName || "Idle - waiting for jobs"}
+                            </span>
+                          </div>
+                          <span className="text-muted-foreground text-xs">
+                            last seen {worker.lastHeartbeat ? formatExactTime(worker.lastHeartbeat) : "never"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            }
+            
+            if (!hasThreads) return null;
             
             return (
-              <Card className={`mb-4 ${hasActiveWorkers ? "border-green-200" : "border-yellow-200"}`}>
+              <Card className={`mb-4 ${activeThreads.length > 0 ? "border-green-200" : "border-yellow-200"}`}>
                 <CardHeader className="pb-2">
-                  <CardTitle className={`flex items-center gap-2 ${hasActiveWorkers ? "text-green-700" : "text-yellow-700"}`}>
+                  <CardTitle className={`flex items-center gap-2 ${activeThreads.length > 0 ? "text-green-700" : "text-yellow-700"}`}>
                     <Activity className="w-5 h-5" />
-                    {hasActiveWorkers ? `Active Workers (${totalThreads})` : "Workers (Stale)"}
+                    Active Workers ({activeThreads.length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid gap-3">
-                    {stats.workers.runs.map((worker: WorkerRun) => (
-                      <div key={worker.id} className={`flex items-center justify-between p-3 rounded-lg ${worker.isStale ? "bg-yellow-50 border border-yellow-200" : "bg-muted/50"}`}>
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2">
-                            {worker.isStale ? (
-                              <div className="w-2 h-2 bg-yellow-500 rounded-full" title="Worker may be disconnected" />
-                            ) : (
-                              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                            )}
-                            <span className="font-mono text-sm font-medium">{worker.workerId}</span>
-                            {!worker.isStale && (
-                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">
-                                {worker.activeWorkerCount || 1} worker{(worker.activeWorkerCount || 1) > 1 ? "s" : ""}
-                              </Badge>
-                            )}
-                            {worker.isStale && (
-                              <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs">
-                                <AlertCircle className="w-3 h-3 mr-1" />
-                                Stale
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="text-sm">
-                            {worker.currentJob ? (
-                              <div className="flex items-center gap-2">
-                                <Loader2 className="w-3 h-3 animate-spin text-yellow-600" />
-                                <span className="font-medium">{worker.currentJob.eventName || "Processing..."}</span>
-                                {worker.currentJob.section && (
-                                  <span className="text-muted-foreground">({worker.currentJob.section}/{worker.currentJob.row})</span>
+                  <div className="space-y-4">
+                    {Object.entries(groupedThreads).map(([deviceName, deviceThreads]) => (
+                      <div key={deviceName} className="space-y-2">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <span className="font-mono font-medium text-foreground">{deviceName}</span>
+                          <span>({deviceThreads.length} thread{deviceThreads.length !== 1 ? "s" : ""})</span>
+                        </div>
+                        <div className="grid gap-2 pl-2 border-l-2 border-muted">
+                          {deviceThreads.map((thread: WorkerThread) => (
+                            <div 
+                              key={thread.id} 
+                              className={`flex items-center justify-between p-2 rounded-lg ${
+                                thread.isStale ? "bg-yellow-50 border border-yellow-200" : 
+                                thread.status === "PROCESSING" ? "bg-blue-50 border border-blue-200" :
+                                thread.status === "PAUSED" ? "bg-orange-50 border border-orange-200" :
+                                "bg-muted/50"
+                              }`}
+                            >
+                              <div className="flex items-center gap-3">
+                                {/* Status indicator */}
+                                {thread.isStale ? (
+                                  <div className="w-2 h-2 bg-yellow-500 rounded-full" title="Stale" />
+                                ) : thread.status === "PROCESSING" ? (
+                                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                                ) : thread.status === "PAUSED" ? (
+                                  <div className="w-2 h-2 bg-orange-500 rounded-full" />
+                                ) : (
+                                  <div className="w-2 h-2 bg-green-500 rounded-full" />
                                 )}
-                                {worker.currentJob.cardLast4 && (
-                                  <Badge variant="outline" className="text-xs">****{worker.currentJob.cardLast4}</Badge>
-                                )}
-                                {worker.currentJob.status && (
-                                  <span className="text-xs text-muted-foreground italic">{worker.currentJob.status}</span>
+                                
+                                {/* Worker name */}
+                                <span className="font-mono text-sm">{thread.workerName}</span>
+                                
+                                {/* Status badge */}
+                                <Badge 
+                                  variant="outline" 
+                                  className={`text-xs ${
+                                    thread.status === "PROCESSING" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                    thread.status === "PAUSED" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                    thread.status === "IDLE" ? "bg-gray-50 text-gray-600 border-gray-200" :
+                                    "bg-yellow-50 text-yellow-700 border-yellow-200"
+                                  }`}
+                                >
+                                  {thread.status === "PROCESSING" && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                                  {thread.status}
+                                </Badge>
+                                
+                                {/* Current event if processing */}
+                                {thread.currentEvent && (
+                                  <span className="text-sm text-muted-foreground truncate max-w-[200px]">
+                                    {thread.currentEvent}
+                                  </span>
                                 )}
                               </div>
-                            ) : worker.isStale ? (
-                              <span className="text-yellow-600">
-                                No heartbeat {worker.lastHeartbeat ? `since ${formatExactTime(worker.lastHeartbeat)}` : "- never connected"}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">Idle - waiting for jobs</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4 text-sm">
-                          <div className="flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-green-600" />
-                            <span className="text-green-600">{worker.jobsSuccess}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <XCircle className="w-3 h-3 text-red-600" />
-                            <span className="text-red-600">{worker.jobsFailed}</span>
-                          </div>
-                          <span className="text-muted-foreground text-xs" title={`Started: ${formatExactTime(worker.startedAt)}`}>
-                            last seen {worker.lastHeartbeat ? formatExactTime(worker.lastHeartbeat) : "never"}
-                          </span>
+                              
+                              <div className="flex items-center gap-3 text-sm">
+                                {/* Job stats */}
+                                <div className="flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-green-600" />
+                                  <span className="text-green-600">{thread.jobsCompleted}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <XCircle className="w-3 h-3 text-red-600" />
+                                  <span className="text-red-600">{thread.jobsFailed}</span>
+                                </div>
+                                
+                                {/* Last heartbeat */}
+                                <span className="text-muted-foreground text-xs" title={`Started: ${formatExactTime(thread.startedAt)}`}>
+                                  {formatExactTime(thread.lastHeartbeat)}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     ))}

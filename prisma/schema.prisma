@@ -959,10 +959,36 @@ model CheckoutRun {
   
   // Relations
   jobs         CheckoutJob[]
+  workers      CheckoutWorker[]
 
   @@index([workerId])
   @@index([startedAt])
   @@map("checkout_runs")
+}
+
+model CheckoutWorker {
+  id            String    @id @default(cuid())
+  runId         String    @map("run_id")
+  workerName    String    @map("worker_name")   // e.g., "local-dev-1"
+  deviceName    String    @map("device_name")   // e.g., "local-dev" (parent daemon)
+  status        String    @default("IDLE")      // IDLE, PROCESSING, PAUSED, STOPPED
+  
+  currentJobId  String?   @map("current_job_id")
+  currentEvent  String?   @map("current_event") // Event name for display
+  
+  lastHeartbeat DateTime  @default(now()) @map("last_heartbeat")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  stoppedAt     DateTime? @map("stopped_at")
+  
+  jobsCompleted Int       @default(0) @map("jobs_completed")
+  jobsFailed    Int       @default(0) @map("jobs_failed")
+  
+  run           CheckoutRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  @@index([runId])
+  @@index([status])
+  @@index([lastHeartbeat])
+  @@map("checkout_workers")
 }
 
 model CheckoutConfig {

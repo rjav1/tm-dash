@@ -123,6 +123,30 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Get individual workers from checkout_workers table
+    // Only get workers that are not STOPPED and have heartbeat within last 60 seconds
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
+    const individualWorkers = await prisma.checkoutWorker.findMany({
+      where: {
+        status: { not: "STOPPED" },
+        lastHeartbeat: { gte: oneMinuteAgo },
+      },
+      select: {
+        id: true,
+        runId: true,
+        workerName: true,
+        deviceName: true,
+        status: true,
+        currentJobId: true,
+        currentEvent: true,
+        lastHeartbeat: true,
+        startedAt: true,
+        jobsCompleted: true,
+        jobsFailed: true,
+      },
+      orderBy: { workerName: "asc" },
+    });
+
     // Get currently running jobs to show what each worker is processing
     const runningJobs = await prisma.checkoutJob.findMany({
       where: { status: "RUNNING" },
@@ -210,6 +234,7 @@ export async function GET(request: NextRequest) {
       },
       workers: {
         active: activeRuns.length,
+        totalThreads: individualWorkers.length, // Total active worker threads
         runs: activeRuns.map((run) => {
           // Find the current job for this worker
           const currentJob = runningJobs.find(j => j.workerId === run.workerId);
@@ -236,6 +261,24 @@ export async function GET(request: NextRequest) {
               cardLast4: currentJob.cardLast4,
               status: currentJob.errorMessage, // Daemon uses this for status updates
             } : null,
+          };
+        }),
+        // Individual worker threads with detailed status
+        threads: individualWorkers.map((worker) => {
+          const isStale = worker.lastHeartbeat < thirtySecondsAgo;
+          return {
+            id: worker.id,
+            runId: worker.runId,
+            workerName: worker.workerName,
+            deviceName: worker.deviceName,
+            status: worker.status,
+            currentJobId: worker.currentJobId,
+            currentEvent: worker.currentEvent,
+            lastHeartbeat: worker.lastHeartbeat.toISOString(),
+            startedAt: worker.startedAt.toISOString(),
+            jobsCompleted: worker.jobsCompleted,
+            jobsFailed: worker.jobsFailed,
+            isStale,
           };
         }),
         // Also include jobs being processed by workers not in a run session
