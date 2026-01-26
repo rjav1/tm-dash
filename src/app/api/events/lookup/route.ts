@@ -106,7 +106,39 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 3: If we still don't have artist name, return error
+    // Step 2b: If we still don't have data, try to get it from checkout jobs
+    // The Discord webhook contains event info that's stored in checkout jobs
+    if (!searchArtist && eventId) {
+      const checkoutJob = await prisma.checkoutJob.findFirst({
+        where: { tmEventId: eventId },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (checkoutJob) {
+        searchArtist = checkoutJob.eventName || null;
+        searchVenue = checkoutJob.venue || null;
+        searchDate = checkoutJob.eventDate || null;
+        source = "database";
+
+        // Create scraped data from checkout job
+        if (checkoutJob.eventName) {
+          scrapedData = {
+            eventName: checkoutJob.eventName,
+            artistName: checkoutJob.eventName, // Use event name as artist for now
+            venue: checkoutJob.venue || null,
+            venueCity: null,
+            venueState: null,
+            date: checkoutJob.eventDate || null,
+            time: null,
+            dayOfWeek: null,
+            url: `https://www.ticketmaster.com/event/${eventId}`,
+            scrapedAt: new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    // Step 3: If we still don't have artist name, return error with helpful message
     if (!searchArtist) {
       return NextResponse.json(
         {
@@ -116,7 +148,7 @@ export async function POST(request: NextRequest) {
           scraped: scrapedData,
           vividSeats: null,
           searchParams: { artistName: null, venue: searchVenue, date: searchDate },
-          error: "Could not determine event details. The event page may not exist or failed to load.",
+          error: "Could not sync event details automatically. Ticketmaster blocks server-side requests. Please enter the event details manually from the Discord webhook or event page.",
         } as EventLookupResponse,
         { status: 400 }
       );
@@ -254,6 +286,36 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Step 2b: If we still don't have data, try to get it from checkout jobs
+    if (!searchArtist && eventId) {
+      const checkoutJob = await prisma.checkoutJob.findFirst({
+        where: { tmEventId: eventId },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (checkoutJob) {
+        searchArtist = checkoutJob.eventName || null;
+        searchVenue = checkoutJob.venue || null;
+        searchDate = checkoutJob.eventDate || null;
+        source = "database";
+
+        if (checkoutJob.eventName) {
+          scrapedData = {
+            eventName: checkoutJob.eventName,
+            artistName: checkoutJob.eventName,
+            venue: checkoutJob.venue || null,
+            venueCity: null,
+            venueState: null,
+            date: checkoutJob.eventDate || null,
+            time: null,
+            dayOfWeek: null,
+            url: `https://www.ticketmaster.com/event/${eventId}`,
+            scrapedAt: new Date().toISOString(),
+          };
+        }
+      }
+    }
+
     if (!searchArtist) {
       return NextResponse.json(
         {
@@ -263,7 +325,7 @@ export async function GET(request: NextRequest) {
           scraped: scrapedData,
           vividSeats: null,
           searchParams: { artistName: null, venue: searchVenue, date: searchDate },
-          error: "Could not determine event details. Provide artistName or a valid eventId.",
+          error: "Could not sync event details automatically. Ticketmaster blocks server-side requests. Please enter the event details manually from the Discord webhook or event page.",
         } as EventLookupResponse,
         { status: 400 }
       );
