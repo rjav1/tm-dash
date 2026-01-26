@@ -198,6 +198,7 @@ interface CheckoutConfig {
   discord_webhook_misc?: string;
   headless_mode?: boolean;
   browser_proxy?: string;
+  dashboard_api_url?: string;
 }
 
 // Format exact local time with hours, minutes, and seconds
@@ -1916,6 +1917,18 @@ export default function CheckoutPage() {
                     checked={config.headless_mode === true}
                     onCheckedChange={(checked) => updateConfig({ headless_mode: checked })}
                   />
+                </div>
+                <div className="space-y-2 pt-4 border-t">
+                  <Label>Dashboard API URL</Label>
+                  <Input
+                    placeholder="https://your-app.vercel.app"
+                    value={config.dashboard_api_url || ""}
+                    onChange={(e) => updateConfig({ dashboard_api_url: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    URL for VPS workers and Discord listener to call back to the dashboard.
+                    Required for the Discord listener to create jobs with proper account/card linking.
+                  </p>
                 </div>
               </CardContent>
             </Card>
