@@ -944,6 +944,7 @@ model CheckoutRun {
   // Timing
   startedAt    DateTime  @default(now()) @map("started_at")
   endedAt      DateTime? @map("ended_at")
+  lastHeartbeat DateTime? @map("last_heartbeat") // Updated by daemon every 10s to indicate liveness
   
   // Stats
   jobsQueued   Int       @default(0) @map("jobs_queued")

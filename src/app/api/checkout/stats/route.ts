@@ -89,8 +89,8 @@ export async function GET(request: NextRequest) {
     });
 
     // Get active workers (runs in RUNNING status) with their current jobs
-    // Also include lastHeartbeat check to detect stale workers
-    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    // Workers send heartbeat every 10s, so we check for heartbeat within last 30s
+    const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
     
     const activeRuns = await prisma.checkoutRun.findMany({
       where: { status: "RUNNING" },
@@ -98,6 +98,7 @@ export async function GET(request: NextRequest) {
         id: true,
         workerId: true,
         startedAt: true,
+        lastHeartbeat: true,
         jobsSuccess: true,
         jobsFailed: true,
         _count: { select: { jobs: true } },
@@ -118,24 +119,6 @@ export async function GET(request: NextRequest) {
         errorMessage: true, // Used for status updates
       },
     });
-    
-    // Check for recently completed jobs to determine if worker is actually active
-    // A worker is considered "stale" if it has status RUNNING but hasn't processed
-    // any jobs in the last 2 minutes and isn't currently running a job
-    const recentlyCompletedByWorker: Record<string, Date> = {};
-    for (const run of activeRuns) {
-      const lastJob = await prisma.checkoutJob.findFirst({
-        where: { 
-          runId: run.id,
-          completedAt: { not: null },
-        },
-        orderBy: { completedAt: "desc" },
-        select: { completedAt: true },
-      });
-      if (lastJob?.completedAt) {
-        recentlyCompletedByWorker[run.workerId] = lastJob.completedAt;
-      }
-    }
 
     // Get cards usage stats
     const cardsUsed = await prisma.card.count({
@@ -193,20 +176,19 @@ export async function GET(request: NextRequest) {
         runs: activeRuns.map((run) => {
           // Find the current job for this worker
           const currentJob = runningJobs.find(j => j.workerId === run.workerId);
-          const lastActivity = recentlyCompletedByWorker[run.workerId];
           
-          // Worker is stale if no current job AND (no last activity OR last activity > 2 minutes ago)
-          const isStale = !currentJob && (!lastActivity || lastActivity < twoMinutesAgo);
+          // Worker is stale if no heartbeat OR heartbeat is older than 30 seconds
+          const isStale = !run.lastHeartbeat || run.lastHeartbeat < thirtySecondsAgo;
           
           return {
             id: run.id,
             workerId: run.workerId,
             startedAt: run.startedAt,
+            lastHeartbeat: run.lastHeartbeat?.toISOString() || null,
             jobsProcessed: run._count.jobs,
             jobsSuccess: run.jobsSuccess,
             jobsFailed: run.jobsFailed,
-            lastActivity: lastActivity?.toISOString() || null,
-            isStale, // Worker appears dead/disconnected
+            isStale, // Worker appears dead/disconnected (no heartbeat in 30s)
             currentJob: currentJob ? {
               id: currentJob.id,
               eventName: currentJob.eventName,

@@ -124,10 +124,10 @@ interface WorkerRun {
   id: string;
   workerId: string;
   startedAt: string;
+  lastHeartbeat?: string | null;
   jobsProcessed: number;
   jobsSuccess: number;
   jobsFailed: number;
-  lastActivity?: string | null;
   isStale?: boolean;
   currentJob?: {
     eventName?: string;
@@ -349,7 +349,7 @@ export default function CheckoutPage() {
     if (!supabase) return;
     
     const channel = supabase
-      .channel("checkout-jobs-changes")
+      .channel("checkout-changes")
       .on(
         "postgres_changes",
         {
@@ -363,6 +363,19 @@ export default function CheckoutPage() {
           fetchStats();
         }
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "checkout_runs",
+        },
+        () => {
+          // Refetch stats and runs when worker status changes (heartbeat, start, stop)
+          fetchStats();
+          fetchRuns();
+        }
+      )
       .subscribe((status) => {
         setIsRealtimeConnected(status === "SUBSCRIBED");
       });
@@ -374,7 +387,7 @@ export default function CheckoutPage() {
         supabase.removeChannel(channelRef.current);
       }
     };
-  }, [fetchJobs, fetchStats]);
+  }, [fetchJobs, fetchStats, fetchRuns]);
   
   // Import handlers
   const handleImportSelected = async () => {
@@ -663,19 +676,24 @@ export default function CheckoutPage() {
           <h1 className="text-3xl font-bold">Checkout</h1>
           <p className="text-muted-foreground">Monitor and manage automated checkouts</p>
         </div>
-        <div className="flex items-center gap-4">
-          {isRealtimeConnected ? (
+        <div className="flex items-center gap-3">
+          {/* Worker status - primary indicator */}
+          {hasActiveWorkers ? (
             <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-              <Wifi className="w-3 h-3 mr-1" />Live
+              <Activity className="w-3 h-3 mr-1" />
+              Workers Online ({stats?.workers?.runs?.filter(w => !w.isStale).length || 0})
+            </Badge>
+          ) : stats?.workers?.runs && stats.workers.runs.length > 0 ? (
+            <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
+              <WifiOff className="w-3 h-3 mr-1" />Workers Stale
             </Badge>
           ) : (
             <Badge variant="outline" className="bg-gray-50 text-gray-500">
-              <WifiOff className="w-3 h-3 mr-1" />Offline
+              <WifiOff className="w-3 h-3 mr-1" />No Workers
             </Badge>
           )}
-          <Button variant="outline" size="sm" onClick={() => { fetchJobs(); fetchStats(); fetchRuns(); fetchControlState(); }}>
-            <RefreshCw className="w-4 h-4 mr-2" />Refresh
-          </Button>
+          {/* Supabase realtime connection - secondary indicator */}
+          <span className={`w-2 h-2 rounded-full ${isRealtimeConnected ? "bg-green-500" : "bg-gray-300"}`} title={isRealtimeConnected ? "Realtime connected" : "Realtime disconnected"} />
         </div>
       </div>
       
@@ -852,7 +870,9 @@ export default function CheckoutPage() {
                               )}
                             </div>
                           ) : worker.isStale ? (
-                            <span className="text-yellow-600">No activity - may be disconnected</span>
+                            <span className="text-yellow-600">
+                              No heartbeat {worker.lastHeartbeat ? `since ${formatExactTime(worker.lastHeartbeat)}` : "- never connected"}
+                            </span>
                           ) : (
                             <span className="text-muted-foreground">Idle - waiting for jobs</span>
                           )}
