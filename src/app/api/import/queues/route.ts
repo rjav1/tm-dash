@@ -4,6 +4,7 @@ import { parseQueuesFile } from "@/lib/importers";
 import { AccountStatus } from "@prisma/client";
 import { getOrCreateEvent } from "@/lib/services/event-sync";
 import { calculatePercentile } from "@/lib/analytics";
+import { formatSSE, getStreamHeaders } from "@/lib/utils/streaming";
 
 interface ImportError {
   email?: string;
@@ -16,6 +17,7 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const streaming = formData.get("streaming") === "true";
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -34,6 +36,129 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Get unique event IDs
+    const uniqueEventIds = [...new Set(parseResult.data.map(e => e.eventId))];
+
+    // If streaming, return SSE stream
+    if (streaming) {
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let imported = 0;
+          let updated = 0;
+          let skipped = 0;
+          let eventsCreated = 0;
+
+          const totalSteps = uniqueEventIds.length + parseResult.data.length;
+          let currentStep = 0;
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "start",
+            total: totalSteps,
+            label: `Creating ${uniqueEventIds.length} events, importing ${parseResult.data.length} queue positions...`,
+          })));
+
+          // Create events
+          for (const eventId of uniqueEventIds) {
+            try {
+              const result = await getOrCreateEvent(eventId);
+              if (result.created) eventsCreated++;
+            } catch (error) {
+              console.error(`Failed to create event ${eventId}:`, error);
+            }
+            currentStep++;
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "progress",
+              current: currentStep,
+              total: totalSteps,
+              label: `Creating event ${eventId}`,
+              success: imported + updated,
+              failed: skipped,
+            })));
+          }
+
+          // Import queue positions
+          for (let i = 0; i < parseResult.data.length; i++) {
+            const entry = parseResult.data[i];
+            try {
+              let account = await prisma.account.findUnique({ where: { email: entry.email } });
+              if (!account) {
+                account = await prisma.account.create({
+                  data: { email: entry.email, status: AccountStatus.ACTIVE },
+                });
+              }
+
+              const event = await prisma.event.findUnique({ where: { tmEventId: entry.eventId } });
+              if (!event) {
+                skipped++;
+              } else {
+                const result = await prisma.queuePosition.upsert({
+                  where: { accountId_eventId: { accountId: account.id, eventId: event.id } },
+                  update: { position: entry.position, testedAt: new Date(), source: file.name },
+                  create: { accountId: account.id, eventId: event.id, position: entry.position, source: file.name },
+                });
+                const isNew = result.testedAt.getTime() > Date.now() - 1000;
+                if (isNew) imported++;
+                else updated++;
+              }
+            } catch (error) {
+              skipped++;
+            }
+            currentStep++;
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "progress",
+              current: currentStep,
+              total: totalSteps,
+              label: entry.email,
+              success: imported + updated,
+              failed: skipped,
+            })));
+          }
+
+          // Calculate percentiles
+          for (const eventId of uniqueEventIds) {
+            try {
+              const event = await prisma.event.findUnique({ where: { tmEventId: eventId } });
+              if (!event) continue;
+              const sortedPositions = await prisma.queuePosition.findMany({
+                where: { eventId: event.id, excluded: false },
+                select: { position: true },
+                orderBy: { position: "asc" },
+              });
+              const positionValues = sortedPositions.map(p => p.position);
+              if (positionValues.length > 0) {
+                const allPositions = await prisma.queuePosition.findMany({
+                  where: { eventId: event.id },
+                  select: { id: true, position: true },
+                });
+                for (const pos of allPositions) {
+                  const percentile = Math.round(calculatePercentile(pos.position, positionValues));
+                  await prisma.queuePosition.update({
+                    where: { id: pos.id },
+                    data: { percentile, totalParticipants: positionValues.length },
+                  });
+                }
+              }
+            } catch (error) {
+              console.error(`Failed to calculate percentiles for event ${eventId}:`, error);
+            }
+          }
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "complete",
+            current: totalSteps,
+            total: totalSteps,
+            success: imported + updated,
+            failed: skipped,
+            message: `Imported ${imported} new, updated ${updated}, skipped ${skipped}, events created ${eventsCreated}`,
+          })));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: getStreamHeaders() });
+    }
+
+    // Non-streaming fallback
     let imported = 0;
     let updated = 0;
     let skipped = 0;
@@ -41,9 +166,6 @@ export async function POST(request: NextRequest) {
     let accountsCreated = 0;
     const importErrors: ImportError[] = [];
 
-    // Get unique event IDs and create placeholder events using shared service
-    const uniqueEventIds = [...new Set(parseResult.data.map(e => e.eventId))];
-    
     for (const eventId of uniqueEventIds) {
       try {
         const result = await getOrCreateEvent(eventId);

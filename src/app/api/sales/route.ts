@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { SalesSync } from "@/lib/services/sales-sync";
 import { Prisma } from "@prisma/client";
+import { formatSSE, getStreamHeaders } from "@/lib/utils/streaming";
 
 export async function GET(request: NextRequest) {
   try {
@@ -241,10 +242,54 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { action } = body;
+    const { action, streaming } = body;
     
     if (action === "sync" || !action) {
-      // Sync sales from POS
+      // If streaming, return SSE stream
+      if (streaming) {
+        const stream = new ReadableStream({
+          async start(controller) {
+            const encoder = new TextEncoder();
+
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "start",
+              total: 0,
+              label: "Fetching sales from POS...",
+            })));
+
+            try {
+              const result = await SalesSync.syncSalesFromPos();
+
+              if (result.success) {
+                controller.enqueue(encoder.encode(formatSSE({
+                  type: "complete",
+                  current: result.synced,
+                  total: result.synced,
+                  success: result.created + result.updated,
+                  failed: 0,
+                  message: `Synced ${result.synced} sales (${result.created} new, ${result.updated} updated, ${result.linked} linked)`,
+                })));
+              } else {
+                controller.enqueue(encoder.encode(formatSSE({
+                  type: "error",
+                  message: result.error || "Sync failed",
+                })));
+              }
+            } catch (error) {
+              controller.enqueue(encoder.encode(formatSSE({
+                type: "error",
+                message: error instanceof Error ? error.message : "Sync failed",
+              })));
+            }
+
+            controller.close();
+          },
+        });
+
+        return new Response(stream, { headers: getStreamHeaders() });
+      }
+
+      // Non-streaming fallback
       const result = await SalesSync.syncSalesFromPos();
       
       const { success, error, ...restResult } = result;

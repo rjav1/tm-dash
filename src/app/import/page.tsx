@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Upload, Users, CreditCard, BarChart3, ShoppingCart, CheckCircle2, Unlink, Mail } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -8,6 +8,8 @@ import { FileUpload } from "@/components/file-upload";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { EmailCsvImportDialog } from "@/components/email-csv-import-dialog";
+import { ProgressBar, ProgressStatus } from "@/components/ui/progress-bar";
+import { parseSSEStream, StreamProgressEvent } from "@/lib/utils/streaming";
 
 interface ImportResult {
   success: boolean;
@@ -18,56 +20,204 @@ interface ImportResult {
   eventsCreated?: number;
 }
 
+interface ProgressState {
+  current: number;
+  total: number;
+  label: string;
+  status: ProgressStatus;
+  startTime: Date | null;
+  successCount: number;
+  failedCount: number;
+  message: string | null;
+}
+
+const initialProgress: ProgressState = {
+  current: 0,
+  total: 0,
+  label: "",
+  status: "idle",
+  startTime: null,
+  successCount: 0,
+  failedCount: 0,
+  message: null,
+};
+
 export default function ImportPage() {
-  const [importing, setImporting] = useState<string | null>(null);
+  const [progress, setProgress] = useState<Record<string, ProgressState>>({});
   const [results, setResults] = useState<Record<string, ImportResult>>({});
   const [emailCsvDialogOpen, setEmailCsvDialogOpen] = useState(false);
   const { toast } = useToast();
 
-  const handleImport = async (
+  const handleImport = useCallback(async (
     file: File,
     endpoint: string,
     type: string
   ) => {
-    setImporting(type);
+    // Initialize progress
+    setProgress(prev => ({
+      ...prev,
+      [type]: { ...initialProgress, status: "running", startTime: new Date(), label: `Uploading ${file.name}...` }
+    }));
+
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("streaming", "true");
 
       const response = await fetch(endpoint, {
         method: "POST",
         body: formData,
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Import failed");
+      }
 
-      if (data.success) {
-        setResults((prev) => ({ ...prev, [type]: data }));
-        toast({
-          title: "Import Successful",
-          description: `Imported ${data.imported} records (${data.skipped} skipped)`,
+      // Check if response is SSE stream
+      const contentType = response.headers.get("content-type");
+      if (contentType?.includes("text/event-stream")) {
+        // Parse SSE stream
+        await parseSSEStream(response, (event: StreamProgressEvent) => {
+          switch (event.type) {
+            case "start":
+              setProgress(prev => ({
+                ...prev,
+                [type]: {
+                  ...prev[type],
+                  total: event.total || 0,
+                  label: event.label || "Starting...",
+                }
+              }));
+              break;
+            case "progress":
+              setProgress(prev => ({
+                ...prev,
+                [type]: {
+                  ...prev[type],
+                  current: event.current || 0,
+                  total: event.total || prev[type]?.total || 0,
+                  label: event.label || prev[type]?.label || "",
+                  successCount: event.success || 0,
+                  failedCount: event.failed || 0,
+                }
+              }));
+              break;
+            case "complete":
+              setProgress(prev => ({
+                ...prev,
+                [type]: {
+                  ...prev[type],
+                  current: event.total || prev[type]?.total || 0,
+                  status: "success",
+                  successCount: event.success || 0,
+                  failedCount: event.failed || 0,
+                  message: event.message || "Complete",
+                }
+              }));
+              setResults(prev => ({
+                ...prev,
+                [type]: {
+                  success: true,
+                  imported: event.success || 0,
+                  skipped: event.failed || 0,
+                  total: event.total || 0,
+                }
+              }));
+              toast({
+                title: "Import Complete",
+                description: event.message || `Imported ${event.success} records`,
+              });
+              break;
+            case "error":
+              setProgress(prev => ({
+                ...prev,
+                [type]: {
+                  ...prev[type],
+                  status: "error",
+                  message: event.message || "Import failed",
+                }
+              }));
+              toast({
+                title: "Import Failed",
+                description: event.message || "Unknown error",
+                variant: "destructive",
+              });
+              break;
+          }
         });
       } else {
-        toast({
-          title: "Import Failed",
-          description: data.error || "Unknown error",
-          variant: "destructive",
-        });
+        // Fallback for non-streaming response
+        const data = await response.json();
+        if (data.success) {
+          setProgress(prev => ({
+            ...prev,
+            [type]: {
+              ...prev[type],
+              current: data.total,
+              total: data.total,
+              status: "success",
+              successCount: (data.imported || 0) + (data.updated || 0),
+              failedCount: data.skipped || 0,
+              message: `Imported ${data.imported} records`,
+            }
+          }));
+          setResults(prev => ({ ...prev, [type]: data }));
+          toast({
+            title: "Import Successful",
+            description: `Imported ${data.imported} records (${data.skipped} skipped)`,
+          });
+        } else {
+          throw new Error(data.error || "Import failed");
+        }
       }
     } catch (error) {
+      setProgress(prev => ({
+        ...prev,
+        [type]: {
+          ...prev[type],
+          status: "error",
+          message: error instanceof Error ? error.message : "Import failed",
+        }
+      }));
       toast({
         title: "Import Failed",
-        description: "Failed to upload file",
+        description: error instanceof Error ? error.message : "Failed to upload file",
         variant: "destructive",
       });
-    } finally {
-      setImporting(null);
     }
+  }, [toast]);
+
+  const getProgress = (type: string) => progress[type] || initialProgress;
+
+  const ImportProgress = ({ type }: { type: string }) => {
+    const p = getProgress(type);
+    if (p.status === "idle") return null;
+
+    return (
+      <div className="mt-4">
+        <ProgressBar
+          current={p.current}
+          total={p.total}
+          label={p.label}
+          status={p.status}
+          showElapsedTime={p.status === "running"}
+          startTime={p.startTime || undefined}
+          showEstimate={p.status === "running"}
+          successMessage={p.message || undefined}
+          errorMessage={p.message || undefined}
+        />
+      </div>
+    );
   };
 
   const ImportResultBadge = ({ type }: { type: string }) => {
     const result = results[type];
-    if (!result) return null;
+    const p = getProgress(type);
+    
+    // Only show if completed and not showing progress
+    if (!result || p.status === "running") return null;
+    if (p.status === "success" || p.status === "error") return null; // Progress bar handles this
 
     return (
       <div className="flex items-center gap-2 mt-4 p-3 bg-muted rounded-lg">
@@ -151,12 +301,10 @@ export default function ImportPage() {
               <FileUpload
                 onFileSelect={(file) => handleImport(file, "/api/import/profiles", "profiles")}
                 description="CSV file with account emails and card details"
+                disabled={getProgress("profiles").status === "running"}
               />
 
-              {importing === "profiles" && (
-                <p className="text-sm text-muted-foreground">Importing...</p>
-              )}
-
+              <ImportProgress type="profiles" />
               <ImportResultBadge type="profiles" />
             </CardContent>
           </Card>
@@ -190,12 +338,10 @@ export default function ImportPage() {
               <FileUpload
                 onFileSelect={(file) => handleImport(file, "/api/import/card-profiles", "card-profiles")}
                 description="CSV file with card profiles (no email column)"
+                disabled={getProgress("card-profiles").status === "running"}
               />
 
-              {importing === "card-profiles" && (
-                <p className="text-sm text-muted-foreground">Importing...</p>
-              )}
-
+              <ImportProgress type="card-profiles" />
               <ImportResultBadge type="card-profiles" />
             </CardContent>
           </Card>
@@ -229,12 +375,10 @@ export default function ImportPage() {
               <FileUpload
                 onFileSelect={(file) => handleImport(file, "/api/import/accounts", "accounts")}
                 description="CSV file with email, password, and IMAP provider"
+                disabled={getProgress("accounts").status === "running"}
               />
 
-              {importing === "accounts" && (
-                <p className="text-sm text-muted-foreground">Importing...</p>
-              )}
-
+              <ImportProgress type="accounts" />
               <ImportResultBadge type="accounts" />
             </CardContent>
           </Card>
@@ -269,12 +413,10 @@ export default function ImportPage() {
                 onFileSelect={(file) => handleImport(file, "/api/import/queues", "queues")}
                 description="Tab-separated file from Encore queue output"
                 accept={{ "text/plain": [".txt"], "text/csv": [".csv"] }}
+                disabled={getProgress("queues").status === "running"}
               />
 
-              {importing === "queues" && (
-                <p className="text-sm text-muted-foreground">Importing...</p>
-              )}
-
+              <ImportProgress type="queues" />
               <ImportResultBadge type="queues" />
             </CardContent>
           </Card>
@@ -308,12 +450,10 @@ export default function ImportPage() {
               <FileUpload
                 onFileSelect={(file) => handleImport(file, "/api/import/purchases", "purchases")}
                 description="CSV export file from tm-checkout"
+                disabled={getProgress("purchases").status === "running"}
               />
 
-              {importing === "purchases" && (
-                <p className="text-sm text-muted-foreground">Importing...</p>
-              )}
-
+              <ImportProgress type="purchases" />
               <ImportResultBadge type="purchases" />
             </CardContent>
           </Card>

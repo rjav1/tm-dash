@@ -1,15 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { parseCardProfilesFile } from "@/lib/importers";
+import { formatSSE, getStreamHeaders } from "@/lib/utils/streaming";
+
+/**
+ * Helper to get or create card tag for auto-tagging
+ * 15-digit cards get "amex" tag, others can get "visa" by default
+ */
+async function getOrCreateCardTag(name: string, color: string) {
+  let tag = await prisma.cardTag.findUnique({ where: { name } });
+  if (!tag) {
+    tag = await prisma.cardTag.create({ data: { name, color } });
+  }
+  return tag;
+}
 
 /**
  * Import card profiles (unlinked cards without email)
  * These cards will have accountId = null
+ * Auto-tags: 15-digit cards get "amex" tag
  */
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const streaming = formData.get("streaming") === "true";
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -25,6 +40,105 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Pre-load tags for auto-tagging
+    const amexTag = await getOrCreateCardTag("amex", "#006fcf");
+
+    // If streaming, return SSE stream
+    if (streaming) {
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let imported = 0;
+          let updated = 0;
+          let skipped = 0;
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "start",
+            total: entries.length,
+            label: `Importing ${entries.length} card profiles...`,
+          })));
+
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            try {
+              const existingByProfile = await prisma.card.findUnique({ where: { profileName: entry.profileName } });
+              const existingByCardNumber = await prisma.card.findUnique({ where: { cardNumber: entry.cardNumber } });
+
+              if (existingByCardNumber && existingByCardNumber.profileName !== entry.profileName) {
+                skipped++;
+              } else if (existingByProfile) {
+                await prisma.card.update({
+                  where: { profileName: entry.profileName },
+                  data: {
+                    cardType: entry.cardType,
+                    cardNumber: entry.cardNumber,
+                    expMonth: entry.expMonth,
+                    expYear: entry.expYear,
+                    cvv: entry.cvv,
+                    billingName: entry.billingName,
+                    billingPhone: entry.billingPhone,
+                    billingAddress: entry.billingAddress,
+                    billingZip: entry.billingZip,
+                    billingCity: entry.billingCity,
+                    billingState: entry.billingState,
+                  },
+                });
+                updated++;
+              } else {
+                // Check if 15-digit card (AMEX)
+                const cleanCardNumber = entry.cardNumber.replace(/\D/g, "");
+                const isAmex = cleanCardNumber.length === 15;
+                
+                await prisma.card.create({
+                  data: {
+                    accountId: null,
+                    profileName: entry.profileName,
+                    cardType: entry.cardType,
+                    cardNumber: entry.cardNumber,
+                    expMonth: entry.expMonth,
+                    expYear: entry.expYear,
+                    cvv: entry.cvv,
+                    billingName: entry.billingName,
+                    billingPhone: entry.billingPhone,
+                    billingAddress: entry.billingAddress,
+                    billingZip: entry.billingZip,
+                    billingCity: entry.billingCity,
+                    billingState: entry.billingState,
+                    // Auto-tag 15-digit cards as amex
+                    ...(isAmex && { tags: { connect: { id: amexTag.id } } }),
+                  },
+                });
+                imported++;
+              }
+            } catch (error) {
+              skipped++;
+            }
+
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "progress",
+              current: i + 1,
+              total: entries.length,
+              label: entry.profileName,
+              success: imported + updated,
+              failed: skipped,
+            })));
+          }
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "complete",
+            current: entries.length,
+            total: entries.length,
+            success: imported + updated,
+            failed: skipped,
+            message: `Imported ${imported} new, updated ${updated}, skipped ${skipped}`,
+          })));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: getStreamHeaders() });
+    }
+
+    // Non-streaming fallback
     let imported = 0;
     let updated = 0;
     let skipped = 0;
@@ -72,6 +186,10 @@ export async function POST(request: NextRequest) {
           });
           updated++;
         } else {
+          // Check if 15-digit card (AMEX)
+          const cleanCardNumber = entry.cardNumber.replace(/\D/g, "");
+          const isAmex = cleanCardNumber.length === 15;
+          
           // Create new unlinked card (accountId = null)
           await prisma.card.create({
             data: {
@@ -88,6 +206,8 @@ export async function POST(request: NextRequest) {
               billingZip: entry.billingZip,
               billingCity: entry.billingCity,
               billingState: entry.billingState,
+              // Auto-tag 15-digit cards as amex
+              ...(isAmex && { tags: { connect: { id: amexTag.id } } }),
             },
           });
           imported++;

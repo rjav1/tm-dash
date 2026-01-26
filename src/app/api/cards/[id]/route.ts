@@ -22,6 +22,13 @@ export async function GET(
             status: true,
           },
         },
+        tags: {
+          select: {
+            id: true,
+            name: true,
+            color: true,
+          },
+        },
         purchases: {
           select: {
             id: true,
@@ -57,6 +64,11 @@ export async function GET(
       orderBy: { email: "asc" },
     });
 
+    // Get all card tags for tag management
+    const availableTags = await prisma.cardTag.findMany({
+      orderBy: { name: "asc" },
+    });
+
     return NextResponse.json({
       card: {
         id: card.id,
@@ -73,6 +85,7 @@ export async function GET(
         billingCity: card.billingCity,
         billingState: card.billingState,
         account: card.account,
+        tags: card.tags,
         purchases: card.purchases.map((p) => ({
           ...p,
           totalPrice: p.totalPrice ? Number(p.totalPrice) : null,
@@ -80,6 +93,7 @@ export async function GET(
         isLinked: card.accountId !== null,
       },
       availableAccounts,
+      availableTags,
     });
   } catch (error) {
     console.error("Get card error:", error);
@@ -172,15 +186,42 @@ export async function PATCH(
     if (body.billingCity !== undefined) updateData.billingCity = body.billingCity;
     if (body.billingState !== undefined) updateData.billingState = body.billingState;
 
+    // Handle tag operations
+    interface TagConnect {
+      connect?: { id: string }[];
+      disconnect?: { id: string }[];
+      set?: { id: string }[];
+    }
+    let tagOperation: TagConnect | undefined;
+    
+    if (body.addTagIds && Array.isArray(body.addTagIds)) {
+      tagOperation = { connect: body.addTagIds.map((id: string) => ({ id })) };
+    } else if (body.removeTagIds && Array.isArray(body.removeTagIds)) {
+      tagOperation = { disconnect: body.removeTagIds.map((id: string) => ({ id })) };
+    } else if (body.tagIds !== undefined && Array.isArray(body.tagIds)) {
+      // Replace all tags
+      tagOperation = { set: body.tagIds.map((id: string) => ({ id })) };
+    }
+
     const updated = await prisma.card.update({
       where: { id },
-      data: updateData,
+      data: {
+        ...updateData,
+        ...(tagOperation && { tags: tagOperation }),
+      },
       include: {
         account: {
           select: {
             id: true,
             email: true,
             status: true,
+          },
+        },
+        tags: {
+          select: {
+            id: true,
+            name: true,
+            color: true,
           },
         },
       },

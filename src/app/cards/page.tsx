@@ -53,7 +53,8 @@ type ColumnKey =
   | "phone" 
   | "purchases"
   | "useCount"
-  | "lastUsed";
+  | "lastUsed"
+  | "tags";
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
   profile: "Profile",
@@ -73,6 +74,7 @@ const COLUMN_LABELS: Record<ColumnKey, string> = {
   purchases: "Purchases",
   useCount: "Uses",
   lastUsed: "Last Used",
+  tags: "Tags",
 };
 
 // Default visible columns - ordered: name, card number, expiry, cvv, street, city, state, zip, phone
@@ -89,7 +91,14 @@ const DEFAULT_VISIBLE_COLUMNS: Set<ColumnKey> = new Set([
   "status",
   "checkoutStatus",
   "purchases",
+  "tags",
 ]);
+
+interface CardTag {
+  id: string;
+  name: string;
+  color: string | null;
+}
 
 interface CardData {
   id: string;
@@ -111,6 +120,7 @@ interface CardData {
     email: string;
     status: string;
   } | null;
+  tags: CardTag[];
   purchaseCount: number;
   checkoutJobCount: number;
   isLinked: boolean;
@@ -170,6 +180,8 @@ export default function CardsPage() {
   const [stateFilter, setStateFilter] = useState<string>("all");
   const [hasPurchasesFilter, setHasPurchasesFilter] = useState<string>("all");
   const [expiryFilter, setExpiryFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [availableTags, setAvailableTags] = useState<CardTag[]>([]);
   const [sortBy, setSortBy] = useState<SortField>("profileName");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [showNumbers, setShowNumbers] = useState(false);
@@ -232,6 +244,7 @@ export default function CardsPage() {
       if (stateFilter !== "all") params.set("state", stateFilter);
       if (hasPurchasesFilter !== "all") params.set("hasPurchases", hasPurchasesFilter);
       if (expiryFilter !== "all") params.set("expiry", expiryFilter);
+      if (tagFilter !== "all") params.set("tagId", tagFilter);
       if (showDeleted) params.set("includeDeleted", "true");
       params.set("sortBy", sortBy);
       params.set("sortOrder", sortOrder);
@@ -249,7 +262,18 @@ export default function CardsPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, linkedFilter, checkoutStatusFilter, cardTypeFilter, stateFilter, hasPurchasesFilter, expiryFilter, showDeleted, sortBy, sortOrder, page, pageSize]);
+  }, [search, linkedFilter, checkoutStatusFilter, cardTypeFilter, stateFilter, hasPurchasesFilter, expiryFilter, tagFilter, showDeleted, sortBy, sortOrder, page, pageSize]);
+
+  // Fetch available tags
+  const fetchTags = useCallback(async () => {
+    try {
+      const response = await fetch("/api/card-tags");
+      const data = await response.json();
+      setAvailableTags(data.tags || []);
+    } catch (error) {
+      console.error("Failed to fetch tags:", error);
+    }
+  }, []);
 
   // Soft delete/restore cards
   const handleDeleteCards = async (cardIds: string[], action: "delete" | "restore") => {
@@ -282,6 +306,10 @@ export default function CardsPage() {
   useEffect(() => {
     fetchCards();
   }, [fetchCards]);
+
+  useEffect(() => {
+    fetchTags();
+  }, [fetchTags]);
 
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -647,10 +675,30 @@ export default function CardsPage() {
                   <SelectItem value="valid">Valid (3+ mo)</SelectItem>
                 </SelectContent>
               </Select>
+
+              <Select value={tagFilter} onValueChange={setTagFilter}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue placeholder="Tags" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Tags</SelectItem>
+                  {availableTags.map((tag) => (
+                    <SelectItem key={tag.id} value={tag.id}>
+                      <div className="flex items-center gap-2">
+                        <div 
+                          className="w-3 h-3 rounded-full" 
+                          style={{ backgroundColor: tag.color || "#888" }} 
+                        />
+                        {tag.name}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               
               {/* Clear filters button */}
               {(linkedFilter !== "all" || checkoutStatusFilter !== "all" || cardTypeFilter !== "all" || 
-                stateFilter !== "all" || hasPurchasesFilter !== "all" || expiryFilter !== "all") && (
+                stateFilter !== "all" || hasPurchasesFilter !== "all" || expiryFilter !== "all" || tagFilter !== "all") && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -662,6 +710,7 @@ export default function CardsPage() {
                     setStateFilter("all");
                     setHasPurchasesFilter("all");
                     setExpiryFilter("all");
+                    setTagFilter("all");
                   }}
                 >
                   <X className="h-4 w-4 mr-1" />
@@ -739,6 +788,7 @@ export default function CardsPage() {
                     <SortHeader field="useCount" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort}>Uses</SortHeader>
                   )}
                   {isColumnVisible("lastUsed") && <TableHead>Last Used</TableHead>}
+                  {isColumnVisible("tags") && <TableHead>Tags</TableHead>}
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -947,6 +997,30 @@ export default function CardsPage() {
                     {isColumnVisible("lastUsed") && (
                       <TableCell className="text-sm text-muted-foreground">
                         {card.lastUsedAt ? new Date(card.lastUsedAt).toLocaleDateString() : "-"}
+                      </TableCell>
+                    )}
+                    {isColumnVisible("tags") && (
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {card.tags && card.tags.length > 0 ? (
+                            card.tags.map((tag) => (
+                              <Badge 
+                                key={tag.id} 
+                                variant="outline" 
+                                className="text-xs"
+                                style={{ 
+                                  backgroundColor: tag.color ? `${tag.color}20` : undefined,
+                                  borderColor: tag.color || undefined,
+                                  color: tag.color || undefined,
+                                }}
+                              >
+                                {tag.name}
+                              </Badge>
+                            ))
+                          ) : (
+                            <span className="text-muted-foreground text-xs">-</span>
+                          )}
+                        </div>
                       </TableCell>
                     )}
                     <TableCell onClick={(e) => e.stopPropagation()}>

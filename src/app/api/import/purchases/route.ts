@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { parsePurchasesFile } from "@/lib/importers";
 import { AccountStatus, PurchaseStatus } from "@prisma/client";
+import { formatSSE, getStreamHeaders } from "@/lib/utils/streaming";
 
 interface ImportError {
   jobId?: string;
@@ -14,6 +15,7 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const streaming = formData.get("streaming") === "true";
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -32,13 +34,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let imported = 0;
-    let skipped = 0;
-    let eventsCreated = 0;
-    const importErrors: ImportError[] = [];
-
     // Pre-create all events first for efficiency
-    // Use eventId (from Discord webhook if available, otherwise generated)
     const uniqueEvents = new Map<string, { name: string; date: string; venue: string }>();
     for (const entry of parseResult.data) {
       if (!uniqueEvents.has(entry.eventId)) {
@@ -49,6 +45,169 @@ export async function POST(request: NextRequest) {
         });
       }
     }
+
+    // If streaming, return SSE stream
+    if (streaming) {
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let imported = 0;
+          let skipped = 0;
+          let eventsCreated = 0;
+
+          const totalSteps = uniqueEvents.size + parseResult.data.length;
+          let currentStep = 0;
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "start",
+            total: totalSteps,
+            label: `Creating ${uniqueEvents.size} events, importing ${parseResult.data.length} purchases...`,
+          })));
+
+          // Create events
+          for (const [eventId, eventData] of uniqueEvents.entries()) {
+            try {
+              const existing = await prisma.event.findUnique({ where: { tmEventId: eventId } });
+              if (!existing) {
+                await prisma.event.create({
+                  data: {
+                    tmEventId: eventId,
+                    eventName: eventData.name,
+                    venue: eventData.venue,
+                    eventDateRaw: eventData.date,
+                    eventDate: parseEventDate(eventData.date),
+                  },
+                });
+                eventsCreated++;
+              }
+            } catch (error) {
+              console.error(`Failed to create event ${eventId}:`, error);
+            }
+            currentStep++;
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "progress",
+              current: currentStep,
+              total: totalSteps,
+              label: `Creating event: ${eventData.name.slice(0, 40)}...`,
+              success: imported,
+              failed: skipped,
+            })));
+          }
+
+          // Import purchases
+          for (let i = 0; i < parseResult.data.length; i++) {
+            const entry = parseResult.data[i];
+            try {
+              const existing = await prisma.purchase.findUnique({ where: { externalJobId: entry.jobId } });
+              if (existing) {
+                skipped++;
+              } else {
+                const account = await prisma.account.upsert({
+                  where: { email: entry.email },
+                  create: { email: entry.email, status: AccountStatus.ACTIVE },
+                  update: {},
+                });
+
+                const event = await prisma.event.findUnique({ where: { tmEventId: entry.eventId } });
+                let cardId: string | undefined;
+                const cardLast4 = entry.cardLast4?.trim() || null;
+
+                if (entry.cardNumber && entry.cardNumber.length >= 13) {
+                  let card = await prisma.card.findFirst({ where: { cardNumber: entry.cardNumber } });
+                  if (!card) {
+                    card = await prisma.card.create({
+                      data: {
+                        accountId: account.id,
+                        profileName: entry.profileId || `Card ${entry.cardNumber.slice(-4)}`,
+                        cardNumber: entry.cardNumber,
+                        cardType: entry.cardType || "Unknown",
+                        expMonth: entry.expMonth || "",
+                        expYear: entry.expYear || "",
+                        cvv: entry.cvv || "",
+                        billingName: entry.billingName || "",
+                        billingPhone: entry.billingPhone || "",
+                        billingAddress: entry.billingAddress || "",
+                        billingZip: entry.billingZip || "",
+                        billingCity: entry.billingCity || "",
+                        billingState: entry.billingState || "",
+                      },
+                    });
+                  } else if (!card.accountId) {
+                    await prisma.card.update({ where: { id: card.id }, data: { accountId: account.id } });
+                  }
+                  cardId = card.id;
+                } else if (cardLast4) {
+                  const card = await prisma.card.findFirst({
+                    where: { accountId: account.id, cardNumber: { endsWith: cardLast4 } },
+                  });
+                  cardId = card?.id;
+                }
+
+                const parseDate = (dateStr: string): Date | null => {
+                  if (!dateStr) return null;
+                  const date = new Date(dateStr);
+                  return isNaN(date.getTime()) ? null : date;
+                };
+
+                await prisma.purchase.create({
+                  data: {
+                    accountId: account.id,
+                    eventId: event?.id,
+                    cardId,
+                    cardLast4,
+                    externalJobId: entry.jobId,
+                    status: entry.status === "SUCCESS" ? PurchaseStatus.SUCCESS : PurchaseStatus.FAILED,
+                    errorCode: entry.errorCode || null,
+                    errorMessage: entry.errorMessage || null,
+                    quantity: entry.quantity,
+                    priceEach: entry.priceEach,
+                    totalPrice: entry.totalPrice,
+                    section: entry.section || null,
+                    row: entry.row || null,
+                    seats: entry.seats || null,
+                    checkoutUrl: entry.targetUrl || null,
+                    confirmationUrl: entry.finalUrl || null,
+                    createdAt: parseDate(entry.createdAt) || new Date(),
+                    startedAt: parseDate(entry.startedAt),
+                    completedAt: parseDate(entry.completedAt),
+                    attemptCount: entry.attemptCount,
+                  },
+                });
+                imported++;
+              }
+            } catch (error) {
+              skipped++;
+            }
+            currentStep++;
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "progress",
+              current: currentStep,
+              total: totalSteps,
+              label: entry.email,
+              success: imported,
+              failed: skipped,
+            })));
+          }
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "complete",
+            current: totalSteps,
+            total: totalSteps,
+            success: imported,
+            failed: skipped,
+            message: `Imported ${imported}, skipped ${skipped}, events created ${eventsCreated}`,
+          })));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: getStreamHeaders() });
+    }
+
+    // Non-streaming fallback
+    let imported = 0;
+    let skipped = 0;
+    let eventsCreated = 0;
+    const importErrors: ImportError[] = [];
 
     // Create/upsert all events
     for (const [eventId, eventData] of uniqueEvents.entries()) {

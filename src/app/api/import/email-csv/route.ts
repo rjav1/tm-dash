@@ -3,6 +3,7 @@ import prisma from "@/lib/db";
 import { parseEmailCsvFile } from "@/lib/importers";
 import { AccountStatus, PurchaseStatus } from "@prisma/client";
 import { assignPoNumber } from "@/lib/services/pos-sync";
+import { formatSSE, getStreamHeaders } from "@/lib/utils/streaming";
 
 // Conflict types for card-email matching issues
 export type ConflictType = "CARD_NOT_FOUND" | "CARD_AMBIGUOUS" | "CARD_ACCOUNT_MISMATCH";
@@ -190,6 +191,7 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const streaming = formData.get("streaming") === "true";
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -208,6 +210,113 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // If streaming, return SSE with progress updates
+    // Note: Full conflict/duplicate handling still happens, but we stream progress
+    if (streaming) {
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          const total = parseResult.data.length;
+          let created = 0;
+          let skipped = 0;
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "start",
+            total,
+            label: `Processing ${total} email receipts...`,
+          })));
+
+          const eventCache = new Map<string, string | null>();
+          const accountCache = new Map<string, string>();
+
+          for (let i = 0; i < parseResult.data.length; i++) {
+            const entry = parseResult.data[i];
+            try {
+              // Check for existing
+              const existingByOrderNum = await prisma.purchase.findFirst({
+                where: { tmOrderNumber: entry.tmOrderNumber },
+              });
+
+              if (existingByOrderNum) {
+                skipped++;
+              } else {
+                // Get or create account
+                let accountId = accountCache.get(entry.email);
+                if (!accountId) {
+                  let account = await prisma.account.findUnique({ where: { email: entry.email } });
+                  if (!account) {
+                    account = await prisma.account.create({
+                      data: { email: entry.email, status: AccountStatus.ACTIVE },
+                    });
+                  }
+                  accountId = account.id;
+                  accountCache.set(entry.email, accountId);
+                }
+
+                // Find matching event
+                const eventKey = `${entry.eventName}|${entry.venue}|${entry.eventDate}`;
+                let eventId = eventCache.has(eventKey) ? eventCache.get(eventKey) : undefined;
+                if (eventId === undefined) {
+                  const matchedEvent = await findMatchingEvent(entry.eventName, entry.venue, entry.eventDate);
+                  eventId = matchedEvent?.id || null;
+                  eventCache.set(eventKey, eventId);
+                }
+
+                // Create purchase
+                const purchase = await prisma.purchase.create({
+                  data: {
+                    accountId,
+                    eventId: eventId || null,
+                    cardId: null,
+                    cardLast4: entry.cardLast4 || null,
+                    tmOrderNumber: entry.tmOrderNumber,
+                    status: PurchaseStatus.SUCCESS,
+                    quantity: entry.quantity,
+                    priceEach: entry.quantity > 0 ? entry.totalPrice / entry.quantity : null,
+                    totalPrice: entry.totalPrice,
+                    section: entry.section || null,
+                    row: entry.row || null,
+                    seats: entry.seats || null,
+                    attemptCount: 1,
+                  },
+                });
+
+                try {
+                  await assignPoNumber(purchase.id);
+                } catch {
+                  // Non-fatal
+                }
+                created++;
+              }
+            } catch (error) {
+              skipped++;
+            }
+
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "progress",
+              current: i + 1,
+              total,
+              label: entry.email,
+              success: created,
+              failed: skipped,
+            })));
+          }
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "complete",
+            current: total,
+            total,
+            success: created,
+            failed: skipped,
+            message: `Created ${created} purchases, skipped ${skipped}`,
+          })));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: getStreamHeaders() });
+    }
+
+    // Non-streaming fallback with full conflict handling
     const summary: ImportSummary = {
       purchasesCreated: 0,
       purchasesSkipped: 0,

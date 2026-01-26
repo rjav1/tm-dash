@@ -14,6 +14,7 @@ import { Prisma } from "@prisma/client";
  * - state: Filter by billing state (2-letter code)
  * - hasPurchases: Filter by purchase history ("true" = has purchases, "false" = no purchases)
  * - expiry: Filter by expiry status ("expired", "expiring_soon", "valid")
+ * - tagId: Filter by card tag ID
  * - includeDeleted: Include soft-deleted cards ("true" to include)
  * - page: Page number (default: 1)
  * - limit: Items per page (default: 50, max: 100)
@@ -35,6 +36,7 @@ export async function GET(request: NextRequest) {
     const state = searchParams.get("state"); // 2-letter state code
     const hasPurchases = searchParams.get("hasPurchases"); // "true", "false"
     const expiry = searchParams.get("expiry"); // "expired", "expiring_soon", "valid"
+    const tagId = searchParams.get("tagId"); // Filter by card tag
     const includeDeleted = searchParams.get("includeDeleted") === "true"; // Show soft-deleted cards
     const sortBy = searchParams.get("sortBy") || "createdAt";
     const sortOrder = searchParams.get("sortOrder") || "desc";
@@ -144,6 +146,11 @@ export async function GET(request: NextRequest) {
       where.purchases = { none: {} };
     }
 
+    // Filter by tag
+    if (tagId) {
+      where.tags = { some: { id: tagId } };
+    }
+
     // Search - include street and city
     if (search) {
       const searchConditions: Prisma.CardWhereInput[] = [
@@ -194,6 +201,13 @@ export async function GET(request: NextRequest) {
               status: true,
             },
           },
+          tags: {
+            select: {
+              id: true,
+              name: true,
+              color: true,
+            },
+          },
           _count: {
             select: {
               purchases: true,
@@ -228,6 +242,7 @@ export async function GET(request: NextRequest) {
         billingState: card.billingState,
         deletedAt: card.deletedAt,
         account: card.account,
+        tags: card.tags,
         purchaseCount: card._count.purchases,
         checkoutJobCount: card._count.checkoutJobs,
         isLinked: card.accountId !== null,
@@ -263,11 +278,12 @@ export async function GET(request: NextRequest) {
 
 /**
  * PATCH /api/cards
- * Bulk soft delete or restore cards
+ * Bulk operations on cards
  * 
  * Request Body:
  * - cardIds: Array of card IDs to update
- * - action: "delete" (soft delete) or "restore" (undelete)
+ * - action: "delete" | "restore" | "addTag" | "removeTag"
+ * - tagId: Required for addTag/removeTag actions
  * 
  * Response:
  * - success: boolean
@@ -277,16 +293,62 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { cardIds, action } = body;
+    const { cardIds, action, tagId } = body;
 
     if (!cardIds || !Array.isArray(cardIds) || cardIds.length === 0) {
       return NextResponse.json({ error: "cardIds array required" }, { status: 400 });
     }
 
-    if (!["delete", "restore"].includes(action)) {
-      return NextResponse.json({ error: "action must be 'delete' or 'restore'" }, { status: 400 });
+    if (!["delete", "restore", "addTag", "removeTag"].includes(action)) {
+      return NextResponse.json({ error: "action must be 'delete', 'restore', 'addTag', or 'removeTag'" }, { status: 400 });
     }
 
+    // Handle tag operations
+    if (action === "addTag" || action === "removeTag") {
+      if (!tagId) {
+        return NextResponse.json({ error: "tagId required for tag operations" }, { status: 400 });
+      }
+
+      // Verify tag exists
+      const tag = await prisma.cardTag.findUnique({ where: { id: tagId } });
+      if (!tag) {
+        return NextResponse.json({ error: "Tag not found" }, { status: 404 });
+      }
+
+      // Update each card's tags
+      let updated = 0;
+      for (const cardId of cardIds) {
+        try {
+          if (action === "addTag") {
+            await prisma.card.update({
+              where: { id: cardId },
+              data: {
+                tags: { connect: { id: tagId } },
+              },
+            });
+          } else {
+            await prisma.card.update({
+              where: { id: cardId },
+              data: {
+                tags: { disconnect: { id: tagId } },
+              },
+            });
+          }
+          updated++;
+        } catch {
+          // Skip cards that don't exist or already have/don't have the tag
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        action,
+        tagName: tag.name,
+        updated,
+      });
+    }
+
+    // Handle delete/restore
     const updateData = action === "delete" 
       ? { deletedAt: new Date() }
       : { deletedAt: null };

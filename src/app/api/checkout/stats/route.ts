@@ -89,6 +89,9 @@ export async function GET(request: NextRequest) {
     });
 
     // Get active workers (runs in RUNNING status) with their current jobs
+    // Also include lastHeartbeat check to detect stale workers
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    
     const activeRuns = await prisma.checkoutRun.findMany({
       where: { status: "RUNNING" },
       select: {
@@ -115,6 +118,24 @@ export async function GET(request: NextRequest) {
         errorMessage: true, // Used for status updates
       },
     });
+    
+    // Check for recently completed jobs to determine if worker is actually active
+    // A worker is considered "stale" if it has status RUNNING but hasn't processed
+    // any jobs in the last 2 minutes and isn't currently running a job
+    const recentlyCompletedByWorker: Record<string, Date> = {};
+    for (const run of activeRuns) {
+      const lastJob = await prisma.checkoutJob.findFirst({
+        where: { 
+          runId: run.id,
+          completedAt: { not: null },
+        },
+        orderBy: { completedAt: "desc" },
+        select: { completedAt: true },
+      });
+      if (lastJob?.completedAt) {
+        recentlyCompletedByWorker[run.workerId] = lastJob.completedAt;
+      }
+    }
 
     // Get cards usage stats
     const cardsUsed = await prisma.card.count({
@@ -172,6 +193,11 @@ export async function GET(request: NextRequest) {
         runs: activeRuns.map((run) => {
           // Find the current job for this worker
           const currentJob = runningJobs.find(j => j.workerId === run.workerId);
+          const lastActivity = recentlyCompletedByWorker[run.workerId];
+          
+          // Worker is stale if no current job AND (no last activity OR last activity > 2 minutes ago)
+          const isStale = !currentJob && (!lastActivity || lastActivity < twoMinutesAgo);
+          
           return {
             id: run.id,
             workerId: run.workerId,
@@ -179,6 +205,8 @@ export async function GET(request: NextRequest) {
             jobsProcessed: run._count.jobs,
             jobsSuccess: run.jobsSuccess,
             jobsFailed: run.jobsFailed,
+            lastActivity: lastActivity?.toISOString() || null,
+            isStale, // Worker appears dead/disconnected
             currentJob: currentJob ? {
               id: currentJob.id,
               eventName: currentJob.eventName,

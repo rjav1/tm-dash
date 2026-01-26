@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { parseAccountsFile } from "@/lib/importers";
 import { AccountStatus } from "@prisma/client";
+import { formatSSE, getStreamHeaders } from "@/lib/utils/streaming";
 
 interface ImportError {
   email?: string;
@@ -13,6 +14,7 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const streaming = formData.get("streaming") === "true";
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -25,12 +27,106 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { 
           error: "No valid entries found in file",
-          parseErrors: parseResult.errors.slice(0, 20), // Return first 20 parse errors
+          parseErrors: parseResult.errors.slice(0, 20),
         },
         { status: 400 }
       );
     }
 
+    // If streaming is requested, return SSE stream
+    if (streaming) {
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let imported = 0;
+          let updated = 0;
+          let skipped = 0;
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "start",
+            total: parseResult.data.length,
+            label: `Importing ${parseResult.data.length} accounts...`,
+          })));
+
+          for (let i = 0; i < parseResult.data.length; i++) {
+            const entry = parseResult.data[i];
+            let success = true;
+
+            try {
+              let creationProxyId: string | undefined;
+              if (entry.creationProxy) {
+                const proxy = await prisma.proxy.upsert({
+                  where: { proxyString: entry.creationProxy },
+                  create: {
+                    proxyString: entry.creationProxy,
+                    provider: extractProxyProvider(entry.creationProxy),
+                  },
+                  update: {},
+                });
+                creationProxyId = proxy.id;
+              }
+
+              const existing = await prisma.account.findUnique({
+                where: { email: entry.email },
+              });
+
+              if (existing) {
+                await prisma.account.update({
+                  where: { email: entry.email },
+                  data: {
+                    password: entry.password || existing.password,
+                    imapProvider: entry.imapProvider || existing.imapProvider,
+                    phoneNumber: entry.phoneNumber || existing.phoneNumber,
+                    creationProxyId: creationProxyId || existing.creationProxyId,
+                  },
+                });
+                updated++;
+              } else {
+                await prisma.account.create({
+                  data: {
+                    email: entry.email,
+                    password: entry.password,
+                    imapProvider: entry.imapProvider,
+                    phoneNumber: entry.phoneNumber,
+                    creationProxyId,
+                    status: AccountStatus.ACTIVE,
+                  },
+                });
+                imported++;
+              }
+            } catch (error) {
+              console.error(`Error importing account ${entry.email}:`, error);
+              skipped++;
+              success = false;
+            }
+
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "progress",
+              current: i + 1,
+              total: parseResult.data.length,
+              label: entry.email,
+              success: imported + updated,
+              failed: skipped,
+            })));
+          }
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "complete",
+            current: parseResult.data.length,
+            total: parseResult.data.length,
+            success: imported + updated,
+            failed: skipped,
+            message: `Imported ${imported} new, updated ${updated}, skipped ${skipped}`,
+          })));
+
+          controller.close();
+        },
+      });
+
+      return new Response(stream, { headers: getStreamHeaders() });
+    }
+
+    // Non-streaming fallback
     let imported = 0;
     let updated = 0;
     let skipped = 0;
@@ -38,7 +134,6 @@ export async function POST(request: NextRequest) {
 
     for (const entry of parseResult.data) {
       try {
-        // Create or get proxy if provided
         let creationProxyId: string | undefined;
         if (entry.creationProxy) {
           const proxy = await prisma.proxy.upsert({
@@ -52,13 +147,11 @@ export async function POST(request: NextRequest) {
           creationProxyId = proxy.id;
         }
 
-        // Check if account exists
         const existing = await prisma.account.findUnique({
           where: { email: entry.email },
         });
 
         if (existing) {
-          // Update existing account with new data
           await prisma.account.update({
             where: { email: entry.email },
             data: {
@@ -70,7 +163,6 @@ export async function POST(request: NextRequest) {
           });
           updated++;
         } else {
-          // Create new account
           await prisma.account.create({
             data: {
               email: entry.email,
@@ -100,7 +192,7 @@ export async function POST(request: NextRequest) {
       skipped,
       total: parseResult.data.length,
       parseErrors: parseResult.errors.length,
-      importErrors: importErrors.slice(0, 50), // Return first 50 import errors
+      importErrors: importErrors.slice(0, 50),
       stats: parseResult.stats,
     });
   } catch (error) {

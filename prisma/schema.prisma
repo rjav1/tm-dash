@@ -87,6 +87,22 @@ model AccountTag {
 }
 
 // ========================================
+// Card Tags - For organizing/filtering cards
+// ========================================
+
+model CardTag {
+  id        String   @id @default(cuid())
+  name      String   @unique // e.g., "visa", "amex", "personal"
+  color     String?  // Optional hex color for UI display
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  cards Card[]
+
+  @@map("card_tags")
+}
+
+// ========================================
 // Core Tables
 // ========================================
 
@@ -171,6 +187,7 @@ model Card {
   account      Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
   purchases    Purchase[]
   checkoutJobs CheckoutJob[]
+  tags         CardTag[]     // Tags for organizing cards (e.g., "visa", "amex")
 
   @@index([accountId])
   @@index([checkoutStatus])

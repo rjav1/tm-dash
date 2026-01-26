@@ -5,12 +5,12 @@
  * POST /api/accounts/pos-sync - Sync accounts from POS (update local records)
  */
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
-  AccountPosSync,
   syncAccountsFromPos,
   getAccountPosStats,
 } from "@/lib/services/account-pos-sync";
+import { formatSSE, getStreamHeaders } from "@/lib/utils/streaming";
 
 /**
  * GET /api/accounts/pos-sync
@@ -37,10 +37,57 @@ export async function GET() {
  * POST /api/accounts/pos-sync
  * Sync accounts from POS to update local import status
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const streaming = searchParams.get("streaming") === "true";
+
     console.log("[Account POS Sync API] Starting sync from POS...");
 
+    if (streaming) {
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+
+          controller.enqueue(encoder.encode(formatSSE({
+            type: "start",
+            total: 0,
+            label: "Syncing accounts from POS...",
+          })));
+
+          try {
+            const result = await syncAccountsFromPos();
+
+            if (result.success) {
+              controller.enqueue(encoder.encode(formatSSE({
+                type: "complete",
+                current: result.synced,
+                total: result.synced,
+                success: result.synced,
+                failed: result.notInPos,
+                message: `Synced ${result.synced} accounts, ${result.notInPos} not in POS`,
+              })));
+            } else {
+              controller.enqueue(encoder.encode(formatSSE({
+                type: "error",
+                message: result.error || "Sync failed",
+              })));
+            }
+          } catch (error) {
+            controller.enqueue(encoder.encode(formatSSE({
+              type: "error",
+              message: error instanceof Error ? error.message : "Sync failed",
+            })));
+          }
+
+          controller.close();
+        },
+      });
+
+      return new Response(stream, { headers: getStreamHeaders() });
+    }
+
+    // Non-streaming fallback
     const result = await syncAccountsFromPos();
 
     if (!result.success) {

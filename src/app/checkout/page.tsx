@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   Play,
   Square,
@@ -120,6 +120,25 @@ interface CheckoutRun {
   _count?: { jobs: number };
 }
 
+interface WorkerRun {
+  id: string;
+  workerId: string;
+  startedAt: string;
+  jobsProcessed: number;
+  jobsSuccess: number;
+  jobsFailed: number;
+  lastActivity?: string | null;
+  isStale?: boolean;
+  currentJob?: {
+    eventName?: string;
+    section?: string;
+    row?: string;
+    cardLast4?: string;
+    status?: string;
+    startedAt?: string;
+  } | null;
+}
+
 interface CheckoutStats {
   period: string;
   overview: {
@@ -138,14 +157,8 @@ interface CheckoutStats {
   };
   workers: {
     active: number;
-    runs: Array<{
-      id: string;
-      workerId: string;
-      startedAt: string;
-      jobsProcessed: number;
-      jobsSuccess: number;
-      jobsFailed: number;
-    }>;
+    runs: WorkerRun[];
+    runningJobs?: number;
   };
   cards: {
     available: number;
@@ -178,6 +191,18 @@ interface CheckoutConfig {
   discord_webhook_misc?: string;
   headless_mode?: boolean;
   browser_proxy?: string;
+}
+
+// Format exact local time with hours and minutes
+function formatExactTime(dateString: string): string {
+  const date = new Date(dateString);
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
 }
 
 // Status badge helper
@@ -230,6 +255,10 @@ export default function CheckoutPage() {
   // Realtime state
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  
+  // Auto-save debounce refs
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingConfigRef = useRef<CheckoutConfig | null>(null);
   
   // Fetch functions
   const fetchJobs = useCallback(async () => {
@@ -454,19 +483,19 @@ export default function CheckoutPage() {
     }
   };
   
-  // Save config
-  const handleSaveConfig = async () => {
+  // Auto-save config with debounce
+  const saveConfig = useCallback(async (configToSave: CheckoutConfig) => {
     setIsSavingConfig(true);
     try {
       const res = await fetch("/api/checkout/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
+        body: JSON.stringify(configToSave),
       });
       
       if (!res.ok) throw new Error("Save failed");
       
-      toast({ title: "Configuration Saved" });
+      // Silent save - no toast for auto-save
     } catch (error) {
       toast({
         title: "Error",
@@ -476,7 +505,40 @@ export default function CheckoutPage() {
     } finally {
       setIsSavingConfig(false);
     }
-  };
+  }, [toast]);
+  
+  // Update config with auto-save (debounced)
+  const updateConfig = useCallback((updates: Partial<CheckoutConfig>) => {
+    const newConfig = { ...config, ...updates };
+    setConfig(newConfig);
+    pendingConfigRef.current = newConfig;
+    
+    // Clear existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    
+    // Set new debounced save (save after 500ms of no changes)
+    saveTimeoutRef.current = setTimeout(() => {
+      if (pendingConfigRef.current) {
+        saveConfig(pendingConfigRef.current);
+        pendingConfigRef.current = null;
+      }
+    }, 500);
+  }, [config, saveConfig]);
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        // Save any pending changes on unmount
+        if (pendingConfigRef.current) {
+          saveConfig(pendingConfigRef.current);
+        }
+      }
+    };
+  }, [saveConfig]);
   
   // Test webhook
   const handleTestWebhook = async (webhookKey: string) => {
@@ -574,6 +636,15 @@ export default function CheckoutPage() {
   
   // Jobs ready for import
   const importableJobs = jobs.filter(j => j.status === "SUCCESS" && !j.imported);
+  
+  // Compute if any workers are truly online (connected and not stale)
+  const hasActiveWorkers = useMemo(() => {
+    if (!stats?.workers?.runs) return false;
+    return stats.workers.runs.some(w => !w.isStale);
+  }, [stats?.workers?.runs]);
+  
+  // Workers are considered offline if not connected OR all workers are stale
+  const isOffline = !isRealtimeConnected || !hasActiveWorkers;
   
   if (loading) {
     return (
@@ -738,21 +809,31 @@ export default function CheckoutPage() {
           
           {/* Active Workers Panel */}
           {stats?.workers?.runs && stats.workers.runs.length > 0 && (
-            <Card className="mb-4 border-green-200">
+            <Card className={`mb-4 ${hasActiveWorkers ? "border-green-200" : "border-yellow-200"}`}>
               <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-green-700">
+                <CardTitle className={`flex items-center gap-2 ${hasActiveWorkers ? "text-green-700" : "text-yellow-700"}`}>
                   <Activity className="w-5 h-5" />
-                  Active Workers ({stats.workers.runs.length})
+                  {hasActiveWorkers ? `Active Workers (${stats.workers.runs.filter(w => !w.isStale).length})` : "Workers (Stale)"}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid gap-3">
-                  {stats.workers.runs.map((worker: { id: string; workerId: string; startedAt: string; jobsSuccess: number; jobsFailed: number; currentJob?: { eventName?: string; section?: string; row?: string; cardLast4?: string; status?: string; startedAt?: string } | null }) => (
-                    <div key={worker.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  {stats.workers.runs.map((worker: WorkerRun) => (
+                    <div key={worker.id} className={`flex items-center justify-between p-3 rounded-lg ${worker.isStale ? "bg-yellow-50 border border-yellow-200" : "bg-muted/50"}`}>
                       <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          {worker.isStale ? (
+                            <div className="w-2 h-2 bg-yellow-500 rounded-full" title="Worker may be disconnected" />
+                          ) : (
+                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          )}
                           <span className="font-mono text-sm font-medium">{worker.workerId}</span>
+                          {worker.isStale && (
+                            <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs">
+                              <AlertCircle className="w-3 h-3 mr-1" />
+                              Stale
+                            </Badge>
+                          )}
                         </div>
                         <div className="text-sm">
                           {worker.currentJob ? (
@@ -769,6 +850,8 @@ export default function CheckoutPage() {
                                 <span className="text-xs text-muted-foreground italic">{worker.currentJob.status}</span>
                               )}
                             </div>
+                          ) : worker.isStale ? (
+                            <span className="text-yellow-600">No activity - may be disconnected</span>
                           ) : (
                             <span className="text-muted-foreground">Idle - waiting for jobs</span>
                           )}
@@ -784,7 +867,7 @@ export default function CheckoutPage() {
                           <span className="text-red-600">{worker.jobsFailed}</span>
                         </div>
                         <span className="text-muted-foreground text-xs">
-                          since {formatDate(worker.startedAt)}
+                          since {formatExactTime(worker.startedAt)}
                         </span>
                       </div>
                     </div>
@@ -795,27 +878,23 @@ export default function CheckoutPage() {
           )}
           
           {/* Control Panel */}
-          <Card className="mb-4">
+          <Card className={`mb-4 ${isOffline ? "opacity-60" : ""}`}>
             <CardContent className="pt-4">
+              {isOffline && (
+                <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg flex items-center gap-2 text-yellow-700 text-sm">
+                  <WifiOff className="w-4 h-4" />
+                  <span>Workers offline - controls disabled. Start the checkout daemon on your VPS.</span>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 {/* Pause/Resume */}
                 {isPaused ? (
                   <Button
                     variant="default"
                     size="sm"
-                    onClick={() => {
-                      if (!isRealtimeConnected && activeWorkerCount === 0) {
-                        toast({
-                          title: "No Workers Connected",
-                          description: "Start the checkout daemon on your VPS first",
-                          variant: "destructive",
-                        });
-                        return;
-                      }
-                      handleControl("resume");
-                    }}
-                    disabled={isControlLoading !== null}
-                    title={!isRealtimeConnected && activeWorkerCount === 0 ? "No workers connected" : "Resume workers"}
+                    onClick={() => handleControl("resume")}
+                    disabled={isControlLoading !== null || isOffline}
+                    title={isOffline ? "Workers offline" : "Resume workers"}
                   >
                     {isControlLoading === "resume" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Play className="w-4 h-4 mr-1" />}
                     Resume
@@ -825,7 +904,7 @@ export default function CheckoutPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleControl("pause")}
-                    disabled={isControlLoading !== null}
+                    disabled={isControlLoading !== null || isOffline}
                   >
                     {isControlLoading === "pause" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Square className="w-4 h-4 mr-1" />}
                     Pause
@@ -837,13 +916,13 @@ export default function CheckoutPage() {
                   variant="outline"
                   size="sm"
                   onClick={() => handleControl("skip")}
-                  disabled={isControlLoading !== null || (stats?.overview.running || 0) === 0}
+                  disabled={isControlLoading !== null || isOffline || (stats?.overview.running || 0) === 0}
                 >
                   {isControlLoading === "skip" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <X className="w-4 h-4 mr-1" />}
                   Skip Running
                 </Button>
                 
-                {/* Retry Failed */}
+                {/* Retry Failed - keep enabled even offline since it just modifies DB */}
                 <Button
                   variant="outline"
                   size="sm"
@@ -854,7 +933,7 @@ export default function CheckoutPage() {
                   Retry All Failed
                 </Button>
                 
-                {/* Clear Queue */}
+                {/* Clear Queue - keep enabled even offline */}
                 <Button
                   variant="outline"
                   size="sm"
@@ -883,13 +962,13 @@ export default function CheckoutPage() {
                 <div className="flex-1" />
                 
                 {/* Worker Count */}
-                <div className="flex items-center gap-2">
+                <div className={`flex items-center gap-2 ${isOffline ? "opacity-50" : ""}`}>
                   <span className="text-sm text-muted-foreground">Workers:</span>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => handleControl("scale_workers", { workerCount: Math.max(1, (config.worker_parallelism || 1) - 1) })}
-                    disabled={isControlLoading !== null || (config.worker_parallelism || 1) <= 1}
+                    disabled={isControlLoading !== null || isOffline || (config.worker_parallelism || 1) <= 1}
                   >
                     -
                   </Button>
@@ -898,7 +977,7 @@ export default function CheckoutPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleControl("scale_workers", { workerCount: Math.min(10, (config.worker_parallelism || 1) + 1) })}
-                    disabled={isControlLoading !== null || (config.worker_parallelism || 1) >= 10}
+                    disabled={isControlLoading !== null || isOffline || (config.worker_parallelism || 1) >= 10}
                   >
                     +
                   </Button>
@@ -1200,20 +1279,20 @@ export default function CheckoutPage() {
                     <Input
                       type={showApiKeys.discord_token ? "text" : "password"}
                       value={config.discord_token || ""}
-                      onChange={(e) => setConfig({ ...config, discord_token: e.target.value })}
+                      onChange={(e) => updateConfig({ discord_token: e.target.value })}
                       placeholder="Bot token..."
                     />
                     <Button variant="outline" size="icon" onClick={() => setShowApiKeys({ ...showApiKeys, discord_token: !showApiKeys.discord_token })}>
                       {showApiKeys.discord_token ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">Changes auto-save</p>
                 </div>
                 <div className="space-y-2">
                   <Label>Watch Channel IDs (comma-separated)</Label>
                   <Input
                     value={(config.discord_watch_channel_ids || []).join(", ")}
-                    onChange={(e) => setConfig({
-                      ...config,
+                    onChange={(e) => updateConfig({
                       discord_watch_channel_ids: e.target.value.split(",").map(s => s.trim()).filter(Boolean),
                     })}
                     placeholder="123456789, 987654321"
@@ -1223,8 +1302,7 @@ export default function CheckoutPage() {
                   <Label>Allowed Author IDs (comma-separated, empty = all)</Label>
                   <Input
                     value={(config.discord_allowed_author_ids || []).join(", ")}
-                    onChange={(e) => setConfig({
-                      ...config,
+                    onChange={(e) => updateConfig({
                       discord_allowed_author_ids: e.target.value.split(",").map(s => s.trim()).filter(Boolean),
                     })}
                     placeholder="Leave empty to allow all"
@@ -1246,7 +1324,7 @@ export default function CheckoutPage() {
                     <Input
                       type="number"
                       value={config.max_retries || 3}
-                      onChange={(e) => setConfig({ ...config, max_retries: parseInt(e.target.value) || 3 })}
+                      onChange={(e) => updateConfig({ max_retries: parseInt(e.target.value) || 3 })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -1254,7 +1332,7 @@ export default function CheckoutPage() {
                     <Input
                       type="number"
                       value={config.worker_parallelism || 1}
-                      onChange={(e) => setConfig({ ...config, worker_parallelism: parseInt(e.target.value) || 1 })}
+                      onChange={(e) => updateConfig({ worker_parallelism: parseInt(e.target.value) || 1 })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -1262,7 +1340,7 @@ export default function CheckoutPage() {
                     <Input
                       type="number"
                       value={config.navigation_timeout || 30000}
-                      onChange={(e) => setConfig({ ...config, navigation_timeout: parseInt(e.target.value) || 30000 })}
+                      onChange={(e) => updateConfig({ navigation_timeout: parseInt(e.target.value) || 30000 })}
                     />
                   </div>
                 </div>
@@ -1273,7 +1351,7 @@ export default function CheckoutPage() {
                   </div>
                   <Switch
                     checked={config.auto_link_cards !== false}
-                    onCheckedChange={(checked) => setConfig({ ...config, auto_link_cards: checked })}
+                    onCheckedChange={(checked) => updateConfig({ auto_link_cards: checked })}
                   />
                 </div>
                 <div className="flex items-center justify-between">
@@ -1283,7 +1361,7 @@ export default function CheckoutPage() {
                   </div>
                   <Switch
                     checked={config.headless_mode === true}
-                    onCheckedChange={(checked) => setConfig({ ...config, headless_mode: checked })}
+                    onCheckedChange={(checked) => updateConfig({ headless_mode: checked })}
                   />
                 </div>
               </CardContent>
@@ -1307,7 +1385,7 @@ export default function CheckoutPage() {
                       <Input
                         type={showApiKeys[key] ? "text" : "password"}
                         value={(config as Record<string, unknown>)[key] as string || ""}
-                        onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
+                        onChange={(e) => updateConfig({ [key]: e.target.value } as Partial<CheckoutConfig>)}
                         placeholder="https://discord.com/api/webhooks/..."
                       />
                       <Button variant="outline" size="icon" onClick={() => setShowApiKeys({ ...showApiKeys, [key]: !showApiKeys[key] })}>
@@ -1322,12 +1400,19 @@ export default function CheckoutPage() {
               </CardContent>
             </Card>
             
-            {/* Save Button */}
-            <div className="flex justify-end">
-              <Button onClick={handleSaveConfig} disabled={isSavingConfig}>
-                {isSavingConfig ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
-                Save Configuration
-              </Button>
+            {/* Save Status */}
+            <div className="flex justify-end items-center gap-2 text-sm text-muted-foreground">
+              {isSavingConfig ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4 text-green-600" />
+                  All changes auto-saved
+                </>
+              )}
             </div>
             
             {/* Danger Zone */}
