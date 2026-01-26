@@ -225,6 +225,62 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      case "stop": {
+        // Stop all workers and listener - signals end of run
+        // 1. Set paused flag to stop workers from picking up new jobs
+        await prisma.checkoutConfig.upsert({
+          where: { key: "paused" },
+          update: { value: "true" },
+          create: { key: "paused", value: "true" },
+        });
+        
+        // 2. Mark all RUNNING runs as ABORTED
+        const runsAborted = await prisma.checkoutRun.updateMany({
+          where: { status: "RUNNING" },
+          data: {
+            status: "ABORTED",
+            endedAt: new Date(),
+          },
+        });
+        
+        // 3. Mark all active workers as STOPPED
+        const workersUpdated = await prisma.checkoutWorker.updateMany({
+          where: { status: { not: "STOPPED" } },
+          data: {
+            status: "STOPPED",
+            stoppedAt: new Date(),
+            currentJobId: null,
+            currentEvent: null,
+          },
+        });
+        
+        // 4. Cancel any running jobs (they'll need to be retried)
+        const jobsCancelled = await prisma.checkoutJob.updateMany({
+          where: { status: "RUNNING" },
+          data: {
+            status: "CANCELLED",
+            completedAt: new Date(),
+            errorCode: "STOPPED",
+            errorMessage: "Stopped by user - run ended",
+          },
+        });
+        
+        // 5. Clear Discord listener heartbeat to signal it should stop
+        await prisma.checkoutConfig.upsert({
+          where: { key: "stop_listener" },
+          update: { value: new Date().toISOString() },
+          create: { key: "stop_listener", value: new Date().toISOString() },
+        });
+        
+        return NextResponse.json({
+          success: true,
+          message: `Run stopped: ${runsAborted.count} run(s), ${workersUpdated.count} worker(s), ${jobsCancelled.count} job(s) cancelled`,
+          runsAborted: runsAborted.count,
+          workersUpdated: workersUpdated.count,
+          jobsCancelled: jobsCancelled.count,
+        });
+      }
+
       default:
         return NextResponse.json(
           { error: `Unknown action: ${action}` },

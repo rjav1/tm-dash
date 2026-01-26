@@ -31,6 +31,7 @@ import {
   X,
   Check,
   AlertTriangle,
+  StopCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -1369,6 +1370,22 @@ export default function CheckoutPage() {
                     +
                   </Button>
                 </div>
+                
+                {/* Stop Button - Ends the run */}
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    if (confirm("Stop all workers and end the current run? Running jobs will be cancelled.")) {
+                      handleControl("stop");
+                    }
+                  }}
+                  disabled={isControlLoading !== null || isOffline}
+                  title="Stop all workers and listener, end the run"
+                >
+                  {isControlLoading === "stop" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <StopCircle className="w-4 h-4 mr-1" />}
+                  Stop Run
+                </Button>
                 
                 {/* Status indicator */}
                 {isPaused && (
