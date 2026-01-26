@@ -508,10 +508,15 @@ export async function syncPurchaseToPOS(
   );
 
   // Calculate costs
-  const priceEach = purchase.priceEach ? Number(purchase.priceEach) : 0;
+  // totalPrice is the actual cost with fees - this is what we paid
+  // priceEach is price without fees - only use as fallback
+  const priceEachWithoutFees = purchase.priceEach ? Number(purchase.priceEach) : 0;
   const totalPrice = purchase.totalPrice
     ? Number(purchase.totalPrice)
-    : priceEach * purchase.quantity;
+    : priceEachWithoutFees * purchase.quantity;
+  
+  // Cost per ticket should be calculated from total (includes fees)
+  const costPerTicket = totalPrice / purchase.quantity;
 
   try {
     // Use artist name for search (same as what found the event successfully)
@@ -536,7 +541,7 @@ export async function syncPurchaseToPOS(
             quantity: purchase.quantity,
             startSeat,
             endSeat,
-            costPerTicket: priceEach,
+            costPerTicket,  // Use cost per ticket from total (includes fees)
             totalCost: totalPrice,
             externalListingId: poNumber,
             accountEmail: purchase.account?.email || "",
