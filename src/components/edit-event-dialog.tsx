@@ -234,7 +234,10 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
           }
 
           setSyncStatus("success");
-          let msg = "Event information synced from Ticketmaster page!";
+          // Show appropriate message based on data source
+          let msg = data.source === "database" 
+            ? "Event information loaded from database!"
+            : "Event information synced from Ticketmaster!";
           if (data.vividSeats?.getInPrice) {
             msg += ` Get-in price: $${data.vividSeats.getInPrice}`;
           }
@@ -424,7 +427,7 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Click "Sync Info" to auto-fill all fields from Ticketmaster
+                  Click "Sync Info" to load event details from checkout data. For new events without checkout history, enter details manually.
                 </p>
               </div>
 
