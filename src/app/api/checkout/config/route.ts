@@ -27,6 +27,9 @@ const CONFIG_KEYS = [
   // Extension/browser settings
   "headless_mode", // boolean
   "browser_proxy", // proxy string for browser
+  
+  // Dashboard connection (for VPS workers to call back)
+  "dashboard_api_url", // URL to Dashboard API (e.g., https://yourdomain.com)
 ] as const;
 
 type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -76,6 +79,9 @@ export async function GET() {
       // Browser defaults
       headless_mode: false,
       browser_proxy: "",
+      
+      // Dashboard connection (for VPS workers to call back)
+      dashboard_api_url: "",
       
       // Override with stored values
       ...configMap,
