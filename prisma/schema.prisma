@@ -864,6 +864,7 @@ model CheckoutJob {
   status        String    @default("QUEUED") // QUEUED, RUNNING, SUCCESS, FAILED, NEEDS_REVIEW, CANCELLED
   workerId      String?   @map("worker_id")
   attemptCount  Int       @default(0) @map("attempt_count")
+  priority      Int       @default(0) // Higher = processed first (for priority retries)
   
   // Timing
   createdAt     DateTime  @default(now()) @map("created_at")

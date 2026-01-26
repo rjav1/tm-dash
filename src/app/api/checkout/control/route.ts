@@ -168,7 +168,7 @@ export async function POST(request: NextRequest) {
           );
         }
         
-        // Reset job to QUEUED with attempt count 0 (high priority)
+        // Reset job to QUEUED with high priority (100 = front of queue)
         await prisma.checkoutJob.update({
           where: { id: jobId },
           data: {
@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
         
         return NextResponse.json({
           success: true,
-          message: "Job queued for priority retry",
+          message: "Job queued for priority retry (front of queue)",
           jobId,
         });
       }
@@ -207,6 +207,21 @@ export async function POST(request: NextRequest) {
           success: true,
           message: `Worker count set to ${workerCount}`,
           workerCount,
+        });
+      }
+
+      case "clear_all_data": {
+        // Delete all checkout jobs and runs (for clearing test data)
+        const [jobsDeleted, runsDeleted] = await Promise.all([
+          prisma.checkoutJob.deleteMany({}),
+          prisma.checkoutRun.deleteMany({}),
+        ]);
+        
+        return NextResponse.json({
+          success: true,
+          message: `Cleared ${jobsDeleted.count} jobs and ${runsDeleted.count} runs`,
+          jobsDeleted: jobsDeleted.count,
+          runsDeleted: runsDeleted.count,
         });
       }
 

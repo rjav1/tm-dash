@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
       take: 5,
     });
 
-    // Get active workers (runs in RUNNING status)
+    // Get active workers (runs in RUNNING status) with their current jobs
     const activeRuns = await prisma.checkoutRun.findMany({
       where: { status: "RUNNING" },
       select: {
@@ -98,6 +98,21 @@ export async function GET(request: NextRequest) {
         jobsSuccess: true,
         jobsFailed: true,
         _count: { select: { jobs: true } },
+      },
+    });
+
+    // Get currently running jobs to show what each worker is processing
+    const runningJobs = await prisma.checkoutJob.findMany({
+      where: { status: "RUNNING" },
+      select: {
+        id: true,
+        workerId: true,
+        eventName: true,
+        section: true,
+        row: true,
+        startedAt: true,
+        cardLast4: true,
+        errorMessage: true, // Used for status updates
       },
     });
 
@@ -154,14 +169,29 @@ export async function GET(request: NextRequest) {
       },
       workers: {
         active: activeRuns.length,
-        runs: activeRuns.map((run) => ({
-          id: run.id,
-          workerId: run.workerId,
-          startedAt: run.startedAt,
-          jobsProcessed: run._count.jobs,
-          jobsSuccess: run.jobsSuccess,
-          jobsFailed: run.jobsFailed,
-        })),
+        runs: activeRuns.map((run) => {
+          // Find the current job for this worker
+          const currentJob = runningJobs.find(j => j.workerId === run.workerId);
+          return {
+            id: run.id,
+            workerId: run.workerId,
+            startedAt: run.startedAt,
+            jobsProcessed: run._count.jobs,
+            jobsSuccess: run.jobsSuccess,
+            jobsFailed: run.jobsFailed,
+            currentJob: currentJob ? {
+              id: currentJob.id,
+              eventName: currentJob.eventName,
+              section: currentJob.section,
+              row: currentJob.row,
+              startedAt: currentJob.startedAt,
+              cardLast4: currentJob.cardLast4,
+              status: currentJob.errorMessage, // Daemon uses this for status updates
+            } : null,
+          };
+        }),
+        // Also include jobs being processed by workers not in a run session
+        runningJobs: runningJobs.length,
       },
       cards: {
         available: cardsAvailable,

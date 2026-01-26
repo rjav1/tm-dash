@@ -220,10 +220,12 @@ export default function CheckoutPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
+  const [failedExpanded, setFailedExpanded] = useState(true);
   
   // Control state
   const [isPaused, setIsPaused] = useState(false);
   const [isControlLoading, setIsControlLoading] = useState<string | null>(null);
+  const [activeWorkerCount, setActiveWorkerCount] = useState(0);
   
   // Realtime state
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
@@ -286,6 +288,7 @@ export default function CheckoutPage() {
       if (!res.ok) return;
       const data = await res.json();
       setIsPaused(data.paused || false);
+      setActiveWorkerCount(data.activeWorkers || 0);
     } catch (error) {
       console.error("Error fetching control state:", error);
     }
@@ -525,11 +528,17 @@ export default function CheckoutPage() {
       if (action === "pause") setIsPaused(true);
       if (action === "resume") setIsPaused(false);
       
+      // Update worker count optimistically when scaling
+      if (action === "scale_workers" && extra?.workerCount !== undefined) {
+        setConfig(prev => ({ ...prev, worker_parallelism: extra.workerCount as number }));
+      }
+      
       toast({ title: data.message || "Action completed" });
       
       // Refresh data
       fetchJobs();
       fetchStats();
+      fetchRuns();
     } catch (error) {
       toast({
         title: "Error",
@@ -592,7 +601,7 @@ export default function CheckoutPage() {
               <WifiOff className="w-3 h-3 mr-1" />Offline
             </Badge>
           )}
-          <Button variant="outline" size="sm" onClick={() => { fetchJobs(); fetchStats(); }}>
+          <Button variant="outline" size="sm" onClick={() => { fetchJobs(); fetchStats(); fetchRuns(); fetchControlState(); }}>
             <RefreshCw className="w-4 h-4 mr-2" />Refresh
           </Button>
         </div>
@@ -651,6 +660,140 @@ export default function CheckoutPage() {
         
         {/* Monitor Tab */}
         <TabsContent value="monitor">
+          {/* Failed Jobs Section */}
+          {jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW").length > 0 && (
+            <Card className="mb-4 border-red-200">
+              <CardHeader 
+                className="cursor-pointer select-none" 
+                onClick={() => setFailedExpanded(!failedExpanded)}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-red-600 flex items-center gap-2">
+                      <AlertCircle className="w-5 h-5" />
+                      Failed Jobs ({jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW").length})
+                    </CardTitle>
+                  </div>
+                  <ChevronDown className={`w-5 h-5 transition-transform ${failedExpanded ? "rotate-180" : ""}`} />
+                </div>
+              </CardHeader>
+              {failedExpanded && (
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Event</TableHead>
+                        <TableHead>Error</TableHead>
+                        <TableHead>Card</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Failed At</TableHead>
+                        <TableHead className="w-24">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW").map((job) => (
+                        <TableRow key={job.id}>
+                          <TableCell>
+                            <div className="font-medium">{job.eventName || "Unknown Event"}</div>
+                            <div className="text-xs text-muted-foreground">{job.section && job.row ? `${job.section} / ${job.row}` : ""}</div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-red-600 text-sm font-medium">{job.errorCode || "Unknown"}</div>
+                            <div className="text-xs text-muted-foreground truncate max-w-[200px]" title={job.errorMessage || ""}>{job.errorMessage || ""}</div>
+                          </TableCell>
+                          <TableCell>
+                            {job.cardLast4 ? `****${job.cardLast4}` : "-"}
+                          </TableCell>
+                          <TableCell>{getStatusBadge(job.status)}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{job.completedAt ? formatDate(job.completedAt) : "-"}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={() => handleControl("priority_retry", { jobId: job.id })}
+                                disabled={isControlLoading !== null}
+                              >
+                                <RefreshCw className="w-3 h-3 mr-1" />
+                                Retry
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                title="Delete" 
+                                onClick={() => handleDeleteJob(job.id)}
+                              >
+                                <Trash2 className="w-4 h-4 text-red-500" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              )}
+            </Card>
+          )}
+          
+          {/* Active Workers Panel */}
+          {stats?.workers?.runs && stats.workers.runs.length > 0 && (
+            <Card className="mb-4 border-green-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-green-700">
+                  <Activity className="w-5 h-5" />
+                  Active Workers ({stats.workers.runs.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3">
+                  {stats.workers.runs.map((worker: { id: string; workerId: string; startedAt: string; jobsSuccess: number; jobsFailed: number; currentJob?: { eventName?: string; section?: string; row?: string; cardLast4?: string; status?: string; startedAt?: string } | null }) => (
+                    <div key={worker.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          <span className="font-mono text-sm font-medium">{worker.workerId}</span>
+                        </div>
+                        <div className="text-sm">
+                          {worker.currentJob ? (
+                            <div className="flex items-center gap-2">
+                              <Loader2 className="w-3 h-3 animate-spin text-yellow-600" />
+                              <span className="font-medium">{worker.currentJob.eventName || "Processing..."}</span>
+                              {worker.currentJob.section && (
+                                <span className="text-muted-foreground">({worker.currentJob.section}/{worker.currentJob.row})</span>
+                              )}
+                              {worker.currentJob.cardLast4 && (
+                                <Badge variant="outline" className="text-xs">****{worker.currentJob.cardLast4}</Badge>
+                              )}
+                              {worker.currentJob.status && (
+                                <span className="text-xs text-muted-foreground italic">{worker.currentJob.status}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">Idle - waiting for jobs</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm">
+                        <div className="flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-green-600" />
+                          <span className="text-green-600">{worker.jobsSuccess}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <XCircle className="w-3 h-3 text-red-600" />
+                          <span className="text-red-600">{worker.jobsFailed}</span>
+                        </div>
+                        <span className="text-muted-foreground text-xs">
+                          since {formatDate(worker.startedAt)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          
           {/* Control Panel */}
           <Card className="mb-4">
             <CardContent className="pt-4">
@@ -660,8 +803,19 @@ export default function CheckoutPage() {
                   <Button
                     variant="default"
                     size="sm"
-                    onClick={() => handleControl("resume")}
+                    onClick={() => {
+                      if (!isRealtimeConnected && activeWorkerCount === 0) {
+                        toast({
+                          title: "No Workers Connected",
+                          description: "Start the checkout daemon on your VPS first",
+                          variant: "destructive",
+                        });
+                        return;
+                      }
+                      handleControl("resume");
+                    }}
                     disabled={isControlLoading !== null}
+                    title={!isRealtimeConnected && activeWorkerCount === 0 ? "No workers connected" : "Resume workers"}
                   >
                     {isControlLoading === "resume" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Play className="w-4 h-4 mr-1" />}
                     Resume
@@ -1175,6 +1329,34 @@ export default function CheckoutPage() {
                 Save Configuration
               </Button>
             </div>
+            
+            {/* Danger Zone */}
+            <Card className="border-red-200 mt-6">
+              <CardHeader>
+                <CardTitle className="text-red-600">Danger Zone</CardTitle>
+                <CardDescription>These actions cannot be undone</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium">Clear All Checkout Data</p>
+                    <p className="text-sm text-muted-foreground">Delete all jobs and worker runs from the database</p>
+                  </div>
+                  <Button 
+                    variant="destructive" 
+                    onClick={() => {
+                      if (confirm("Are you sure you want to delete ALL checkout jobs and worker runs? This cannot be undone.")) {
+                        handleControl("clear_all_data");
+                      }
+                    }}
+                    disabled={isControlLoading !== null}
+                  >
+                    {isControlLoading === "clear_all_data" ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                    Clear All Data
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
       </Tabs>
