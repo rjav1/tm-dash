@@ -499,6 +499,82 @@ export default function CheckoutPage() {
     }
   };
   
+  // Bulk retry selected jobs
+  const handleBulkRetry = async () => {
+    if (selectedQueueJobs.size === 0) return;
+    
+    setIsControlLoading("bulk_retry");
+    try {
+      const jobIds = Array.from(selectedQueueJobs);
+      let retried = 0;
+      
+      for (const jobId of jobIds) {
+        const res = await fetch("/api/checkout/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "priority_retry", jobId }),
+        });
+        if (res.ok) retried++;
+      }
+      
+      toast({ title: `Retried ${retried} job(s)` });
+      setSelectedQueueJobs(new Set());
+      fetchJobs();
+      fetchStats();
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to retry jobs",
+        variant: "destructive",
+      });
+    } finally {
+      setIsControlLoading(null);
+    }
+  };
+  
+  // Bulk cancel/skip selected jobs
+  const handleBulkCancel = async () => {
+    if (selectedQueueJobs.size === 0) return;
+    
+    setIsControlLoading("bulk_cancel");
+    try {
+      const jobIds = Array.from(selectedQueueJobs);
+      let cancelled = 0;
+      
+      for (const jobId of jobIds) {
+        const res = await fetch(`/api/checkout/jobs/${jobId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "CANCELLED" }),
+        });
+        if (res.ok) cancelled++;
+      }
+      
+      toast({ title: `Cancelled ${cancelled} job(s)` });
+      setSelectedQueueJobs(new Set());
+      fetchJobs();
+      fetchStats();
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to cancel jobs",
+        variant: "destructive",
+      });
+    } finally {
+      setIsControlLoading(null);
+    }
+  };
+  
+  // Select all jobs matching current filter
+  const selectAllQueueJobs = () => {
+    setSelectedQueueJobs(new Set(jobs.map(j => j.id)));
+  };
+  
+  // Clear queue selection
+  const clearQueueSelection = () => {
+    setSelectedQueueJobs(new Set());
+  };
+  
   // Auto-save config with debounce
   const saveConfig = useCallback(async (configToSave: CheckoutConfig) => {
     setIsSavingConfig(true);
