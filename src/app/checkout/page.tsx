@@ -281,6 +281,8 @@ export default function CheckoutPage() {
   const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set()); // For import tab
   const [selectedQueueJobs, setSelectedQueueJobs] = useState<Set<string>>(new Set()); // For job queue multi-select
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+  const [expandedFailedJobId, setExpandedFailedJobId] = useState<string | null>(null);
+  const [expandedSuccessJobId, setExpandedSuccessJobId] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   
@@ -303,6 +305,8 @@ export default function CheckoutPage() {
   }, [jobs]);
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [failedExpanded, setFailedExpanded] = useState(true);
+  const [successExpanded, setSuccessExpanded] = useState(true);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   
   // Control state
   const [isPaused, setIsPaused] = useState(false);
@@ -917,8 +921,10 @@ export default function CheckoutPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-8"></TableHead>
                         <TableHead>Event</TableHead>
                         <TableHead>Error</TableHead>
+                        <TableHead>Qty</TableHead>
                         <TableHead>Card</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Failed At</TableHead>
@@ -927,42 +933,103 @@ export default function CheckoutPage() {
                     </TableHeader>
                     <TableBody>
                       {jobs.filter(j => j.status === "FAILED" || j.status === "NEEDS_REVIEW").map((job) => (
-                        <TableRow key={job.id}>
-                          <TableCell>
-                            <div className="font-medium">{job.eventName || "Unknown Event"}</div>
-                            <div className="text-xs text-muted-foreground">{job.section && job.row ? `${job.section} / ${job.row}` : ""}</div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="text-red-600 text-sm font-medium">{job.errorCode || "Unknown"}</div>
-                            <div className="text-xs text-muted-foreground truncate max-w-[200px]" title={job.errorMessage || ""}>{job.errorMessage || ""}</div>
-                          </TableCell>
-                          <TableCell>
-                            {job.cardLast4 ? `****${job.cardLast4}` : "-"}
-                          </TableCell>
-                          <TableCell>{getStatusBadge(job.status)}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{job.completedAt ? formatDate(job.completedAt) : "-"}</TableCell>
-                          <TableCell>
-                            <div className="flex gap-1">
-                              <Button 
-                                variant="outline" 
-                                size="sm"
-                                onClick={() => handleControl("priority_retry", { jobId: job.id })}
-                                disabled={isControlLoading !== null}
-                              >
-                                <RefreshCw className="w-3 h-3 mr-1" />
-                                Retry
-                              </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                title="Delete" 
-                                onClick={() => handleDeleteJob(job.id)}
-                              >
-                                <Trash2 className="w-4 h-4 text-red-500" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
+                        <React.Fragment key={job.id}>
+                          <TableRow 
+                            className="cursor-pointer hover:bg-muted/50" 
+                            onClick={() => setExpandedFailedJobId(expandedFailedJobId === job.id ? null : job.id)}
+                          >
+                            <TableCell>
+                              {expandedFailedJobId === job.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-medium">{job.eventName || "Unknown Event"}</div>
+                              <div className="text-xs text-muted-foreground">{job.section && job.row ? `${job.section} / ${job.row}` : ""}</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="text-red-600 text-sm font-medium">{job.errorCode || "Unknown"}</div>
+                              <div className="text-xs text-muted-foreground truncate max-w-[200px]" title={job.errorMessage || ""}>{job.errorMessage || ""}</div>
+                            </TableCell>
+                            <TableCell className="text-center">{job.quantity || 1}</TableCell>
+                            <TableCell>
+                              {job.cardLast4 ? `****${job.cardLast4}` : "-"}
+                            </TableCell>
+                            <TableCell>{getStatusBadge(job.status)}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{job.completedAt ? formatDate(job.completedAt) : "-"}</TableCell>
+                            <TableCell onClick={(e) => e.stopPropagation()}>
+                              <div className="flex gap-1">
+                                <Button 
+                                  variant="outline" 
+                                  size="sm"
+                                  onClick={() => handleControl("priority_retry", { jobId: job.id })}
+                                  disabled={isControlLoading !== null}
+                                >
+                                  <RefreshCw className="w-3 h-3 mr-1" />
+                                  Retry
+                                </Button>
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  title="Delete" 
+                                  onClick={() => handleDeleteJob(job.id)}
+                                >
+                                  <Trash2 className="w-4 h-4 text-red-500" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                          {expandedFailedJobId === job.id && (
+                            <TableRow>
+                              <TableCell colSpan={8} className="bg-muted/30">
+                                <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">TM Event ID</Label>
+                                    <div className="font-mono text-xs">{job.tmEventId || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Event Date</Label>
+                                    <div>{job.eventDate || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Account Email</Label>
+                                    <div>{job.accountEmail || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Total Price</Label>
+                                    <div>{job.totalPrice ? `$${job.totalPrice}` : "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Venue</Label>
+                                    <div>{job.venue || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Seats</Label>
+                                    <div>{job.seats || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Attempts</Label>
+                                    <div>{job.attemptCount}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Worker</Label>
+                                    <div className="font-mono text-xs">{job.workerId || "-"}</div>
+                                  </div>
+                                  <div className="col-span-4">
+                                    <Label className="text-xs text-muted-foreground">Full Error</Label>
+                                    <div className="text-red-600">{job.errorCode}: {job.errorMessage}</div>
+                                  </div>
+                                  {job.targetUrl && (
+                                    <div className="col-span-4">
+                                      <Label className="text-xs text-muted-foreground">Target URL</Label>
+                                      <div className="truncate">
+                                        <a href={job.targetUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{job.targetUrl}</a>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
                       ))}
                     </TableBody>
                   </Table>
@@ -971,6 +1038,119 @@ export default function CheckoutPage() {
             </Card>
           )}
           
+          {/* Successful Jobs Panel */}
+          {jobs.filter(j => j.status === "SUCCESS").length > 0 && (
+            <Card className="mb-4 border-green-200">
+              <CardHeader className="cursor-pointer py-3" onClick={() => setSuccessExpanded(!successExpanded)}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-green-600" />
+                    <CardTitle className="text-green-700">
+                      Successful ({jobs.filter(j => j.status === "SUCCESS").length})
+                    </CardTitle>
+                  </div>
+                  <ChevronDown className={`w-5 h-5 transition-transform ${successExpanded ? "rotate-180" : ""}`} />
+                </div>
+              </CardHeader>
+              {successExpanded && (
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-8"></TableHead>
+                        <TableHead>Event</TableHead>
+                        <TableHead>Section/Row</TableHead>
+                        <TableHead>Qty</TableHead>
+                        <TableHead>Total</TableHead>
+                        <TableHead>Card</TableHead>
+                        <TableHead>Completed</TableHead>
+                        <TableHead>Order #</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {jobs.filter(j => j.status === "SUCCESS").map((job) => (
+                        <React.Fragment key={job.id}>
+                          <TableRow 
+                            className="cursor-pointer hover:bg-muted/50" 
+                            onClick={() => setExpandedSuccessJobId(expandedSuccessJobId === job.id ? null : job.id)}
+                          >
+                            <TableCell>
+                              {expandedSuccessJobId === job.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-medium">{job.eventName || "Unknown Event"}</div>
+                              <div className="text-xs text-muted-foreground">{job.venue}</div>
+                            </TableCell>
+                            <TableCell>{job.section && job.row ? `${job.section} / ${job.row}` : "-"}</TableCell>
+                            <TableCell className="text-center font-medium">{job.quantity || 1}</TableCell>
+                            <TableCell>{job.totalPrice ? `$${job.totalPrice}` : "-"}</TableCell>
+                            <TableCell>****{job.cardLast4 || "????"}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{job.completedAt ? formatDate(job.completedAt) : "-"}</TableCell>
+                            <TableCell>
+                              {job.tmOrderNumber ? (
+                                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 font-mono">
+                                  {job.tmOrderNumber}
+                                </Badge>
+                              ) : "-"}
+                            </TableCell>
+                          </TableRow>
+                          {expandedSuccessJobId === job.id && (
+                            <TableRow>
+                              <TableCell colSpan={8} className="bg-green-50/30">
+                                <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">TM Event ID</Label>
+                                    <div className="font-mono text-xs">{job.tmEventId || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Event Date</Label>
+                                    <div>{job.eventDate || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Account Email</Label>
+                                    <div>{job.accountEmail || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Price Each</Label>
+                                    <div>{job.priceEach ? `$${job.priceEach}` : "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Seats</Label>
+                                    <div>{job.seats || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Attempts</Label>
+                                    <div>{job.attemptCount}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Worker</Label>
+                                    <div className="font-mono text-xs">{job.workerId || "-"}</div>
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground">Imported</Label>
+                                    <div>{job.imported ? "Yes" : "No"}</div>
+                                  </div>
+                                  {job.finalUrl && (
+                                    <div className="col-span-4">
+                                      <Label className="text-xs text-muted-foreground">Confirmation URL</Label>
+                                      <div className="truncate">
+                                        <a href={job.finalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{job.finalUrl}</a>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              )}
+            </Card>
+          )}
+
           {/* Active Workers Panel */}
           {stats?.workers?.runs && stats.workers.runs.length > 0 && (() => {
             // Calculate total worker threads across all daemons
@@ -1256,6 +1436,7 @@ export default function CheckoutPage() {
                       <TableHead className="w-8"></TableHead>
                       <TableHead>Event</TableHead>
                       <TableHead>Section/Row</TableHead>
+                      <TableHead>Qty</TableHead>
                       <TableHead>Card</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Expires</TableHead>
@@ -1294,8 +1475,8 @@ export default function CheckoutPage() {
                           </TableCell>
                           <TableCell>
                             {job.section && job.row ? `${job.section} / ${job.row}` : job.section || "-"}
-                            {job.quantity > 1 && <span className="text-xs text-muted-foreground ml-1">×{job.quantity}</span>}
                           </TableCell>
+                          <TableCell className="text-center font-medium">{job.quantity || 1}</TableCell>
                           <TableCell>
                             {job.cardLast4 ? (
                               <div className="flex items-center gap-1">
@@ -1350,7 +1531,7 @@ export default function CheckoutPage() {
                         </TableRow>
                         {expandedJobId === job.id && (
                           <TableRow>
-                            <TableCell colSpan={9} className="bg-muted/30">
+                            <TableCell colSpan={10} className="bg-muted/30">
                               <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                                 <div>
                                   <Label className="text-xs text-muted-foreground">TM Event ID</Label>
@@ -1512,7 +1693,7 @@ export default function CheckoutPage() {
           <Card>
             <CardHeader>
               <CardTitle>Worker Runs</CardTitle>
-              <CardDescription>History of checkout worker sessions</CardDescription>
+              <CardDescription>History of checkout worker sessions - Click a run to see its jobs</CardDescription>
             </CardHeader>
             <CardContent>
               {runs.length === 0 ? (
@@ -1524,6 +1705,7 @@ export default function CheckoutPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-8"></TableHead>
                       <TableHead>Worker ID</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Started</TableHead>
@@ -1535,23 +1717,87 @@ export default function CheckoutPage() {
                   </TableHeader>
                   <TableBody>
                     {runs.map((run) => (
-                      <TableRow key={run.id}>
-                        <TableCell className="font-mono text-sm">{run.workerId}</TableCell>
-                        <TableCell>
-                          {run.status === "RUNNING" ? (
-                            <Badge variant="outline" className="bg-yellow-50 text-yellow-700"><Loader2 className="w-3 h-3 mr-1 animate-spin" />Running</Badge>
-                          ) : run.status === "COMPLETED" ? (
-                            <Badge variant="outline" className="bg-green-50 text-green-700"><Check className="w-3 h-3 mr-1" />Completed</Badge>
-                          ) : (
-                            <Badge variant="outline">{run.status}</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm">{formatDate(run.startedAt)}</TableCell>
-                        <TableCell className="text-sm">{run.endedAt ? formatDate(run.endedAt) : "-"}</TableCell>
-                        <TableCell className="text-green-600">{run.jobsSuccess}</TableCell>
-                        <TableCell className="text-red-600">{run.jobsFailed}</TableCell>
-                        <TableCell className="text-orange-600">{run.jobsReview}</TableCell>
-                      </TableRow>
+                      <React.Fragment key={run.id}>
+                        <TableRow 
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => setExpandedRunId(expandedRunId === run.id ? null : run.id)}
+                        >
+                          <TableCell>
+                            {expandedRunId === run.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">{run.workerId}</TableCell>
+                          <TableCell>
+                            {run.status === "RUNNING" ? (
+                              <Badge variant="outline" className="bg-yellow-50 text-yellow-700"><Loader2 className="w-3 h-3 mr-1 animate-spin" />Running</Badge>
+                            ) : run.status === "COMPLETED" ? (
+                              <Badge variant="outline" className="bg-green-50 text-green-700"><Check className="w-3 h-3 mr-1" />Completed</Badge>
+                            ) : (
+                              <Badge variant="outline">{run.status}</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-sm">{formatDate(run.startedAt)}</TableCell>
+                          <TableCell className="text-sm">{run.endedAt ? formatDate(run.endedAt) : "-"}</TableCell>
+                          <TableCell className="text-green-600 font-medium">{run.jobsSuccess}</TableCell>
+                          <TableCell className="text-red-600 font-medium">{run.jobsFailed}</TableCell>
+                          <TableCell className="text-orange-600 font-medium">{run.jobsReview}</TableCell>
+                        </TableRow>
+                        {expandedRunId === run.id && (
+                          <TableRow>
+                            <TableCell colSpan={8} className="bg-muted/30 p-0">
+                              <div className="p-4">
+                                <h4 className="text-sm font-medium mb-3">Jobs in this run</h4>
+                                {jobs.filter(j => j.runId === run.id).length === 0 ? (
+                                  <div className="text-center py-4 text-muted-foreground text-sm">
+                                    No jobs found for this run (jobs may have been processed in a different run or not linked)
+                                  </div>
+                                ) : (
+                                  <Table>
+                                    <TableHeader>
+                                      <TableRow>
+                                        <TableHead>Event</TableHead>
+                                        <TableHead>Section/Row</TableHead>
+                                        <TableHead>Qty</TableHead>
+                                        <TableHead>Total</TableHead>
+                                        <TableHead>Card</TableHead>
+                                        <TableHead>Status</TableHead>
+                                        <TableHead>Order #</TableHead>
+                                        <TableHead>Error</TableHead>
+                                      </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                      {jobs.filter(j => j.runId === run.id).map((job) => (
+                                        <TableRow key={job.id}>
+                                          <TableCell>
+                                            <div className="font-medium">{job.eventName || "Unknown"}</div>
+                                            <div className="text-xs text-muted-foreground">{job.venue}</div>
+                                          </TableCell>
+                                          <TableCell>{job.section && job.row ? `${job.section} / ${job.row}` : "-"}</TableCell>
+                                          <TableCell className="text-center">{job.quantity || 1}</TableCell>
+                                          <TableCell>{job.totalPrice ? `$${job.totalPrice}` : "-"}</TableCell>
+                                          <TableCell>****{job.cardLast4 || "????"}</TableCell>
+                                          <TableCell>{getStatusBadge(job.status)}</TableCell>
+                                          <TableCell>
+                                            {job.tmOrderNumber ? (
+                                              <span className="font-mono text-xs text-green-700">{job.tmOrderNumber}</span>
+                                            ) : "-"}
+                                          </TableCell>
+                                          <TableCell>
+                                            {job.errorCode ? (
+                                              <span className="text-red-600 text-xs" title={job.errorMessage || ""}>
+                                                {job.errorCode}
+                                              </span>
+                                            ) : "-"}
+                                          </TableCell>
+                                        </TableRow>
+                                      ))}
+                                    </TableBody>
+                                  </Table>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
                     ))}
                   </TableBody>
                 </Table>
