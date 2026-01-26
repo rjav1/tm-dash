@@ -213,6 +213,36 @@ function formatExactTime(dateString: string): string {
   });
 }
 
+// Format expiration countdown from Unix timestamp
+function formatExpiration(expiresAt: number | null): { text: string; isExpired: boolean; isUrgent: boolean; secondsLeft: number } {
+  if (!expiresAt) {
+    return { text: "-", isExpired: false, isUrgent: false, secondsLeft: 0 };
+  }
+  
+  const now = Math.floor(Date.now() / 1000);
+  const secondsLeft = expiresAt - now;
+  
+  if (secondsLeft <= 0) {
+    return { text: "Expired", isExpired: true, isUrgent: false, secondsLeft: 0 };
+  }
+  
+  // Less than 2 minutes is urgent
+  const isUrgent = secondsLeft < 120;
+  
+  // Format as countdown
+  if (secondsLeft < 60) {
+    return { text: `${secondsLeft}s`, isExpired: false, isUrgent, secondsLeft };
+  } else if (secondsLeft < 3600) {
+    const mins = Math.floor(secondsLeft / 60);
+    const secs = secondsLeft % 60;
+    return { text: `${mins}m ${secs}s`, isExpired: false, isUrgent, secondsLeft };
+  } else {
+    const hours = Math.floor(secondsLeft / 3600);
+    const mins = Math.floor((secondsLeft % 3600) / 60);
+    return { text: `${hours}h ${mins}m`, isExpired: false, isUrgent: false, secondsLeft };
+  }
+}
+
 // Status badge helper
 function getStatusBadge(status: string) {
   switch (status) {
@@ -253,6 +283,24 @@ export default function CheckoutPage() {
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
+  
+  // Timer for expiration countdowns (forces re-render every second when jobs have expiration times)
+  const [, setCountdownTick] = useState(0);
+  
+  // Effect to tick countdown every second when there are active jobs with expiresAt
+  useEffect(() => {
+    const hasActiveExpiration = jobs.some(
+      job => job.expiresAt && (job.status === "QUEUED" || job.status === "RUNNING")
+    );
+    
+    if (!hasActiveExpiration) return;
+    
+    const interval = setInterval(() => {
+      setCountdownTick(prev => prev + 1);
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [jobs]);
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [failedExpanded, setFailedExpanded] = useState(true);
   
@@ -1210,6 +1258,7 @@ export default function CheckoutPage() {
                       <TableHead>Section/Row</TableHead>
                       <TableHead>Card</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Expires</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="w-20">Actions</TableHead>
                     </TableRow>
@@ -1258,6 +1307,21 @@ export default function CheckoutPage() {
                             )}
                           </TableCell>
                           <TableCell>{getStatusBadge(job.status)}</TableCell>
+                          <TableCell>
+                            {(() => {
+                              const exp = formatExpiration(job.expiresAt);
+                              if (exp.isExpired) {
+                                return <Badge variant="outline" className="bg-gray-100 text-gray-500 border-gray-300">Expired</Badge>;
+                              }
+                              if (exp.isUrgent) {
+                                return <Badge variant="outline" className="bg-red-100 text-red-700 border-red-300 animate-pulse">{exp.text}</Badge>;
+                              }
+                              if (exp.secondsLeft > 0) {
+                                return <span className="text-sm font-mono">{exp.text}</span>;
+                              }
+                              return <span className="text-muted-foreground">-</span>;
+                            })()}
+                          </TableCell>
                           <TableCell className="text-sm text-muted-foreground">{formatDate(job.createdAt)}</TableCell>
                           <TableCell>
                             <div className="flex gap-1">
@@ -1286,8 +1350,16 @@ export default function CheckoutPage() {
                         </TableRow>
                         {expandedJobId === job.id && (
                           <TableRow>
-                            <TableCell colSpan={8} className="bg-muted/30">
-                              <div className="p-4 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                            <TableCell colSpan={9} className="bg-muted/30">
+                              <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">TM Event ID</Label>
+                                  <div className="font-mono text-xs">{job.tmEventId || "-"}</div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Event Date</Label>
+                                  <div>{job.eventDate || "-"}</div>
+                                </div>
                                 <div>
                                   <Label className="text-xs text-muted-foreground">Account Email</Label>
                                   <div>{job.accountEmail || "-"}</div>
@@ -1297,20 +1369,49 @@ export default function CheckoutPage() {
                                   <div>{job.totalPrice ? `$${job.totalPrice}` : "-"}</div>
                                 </div>
                                 <div>
+                                  <Label className="text-xs text-muted-foreground">Seats</Label>
+                                  <div>{job.seats || "-"}</div>
+                                </div>
+                                <div>
                                   <Label className="text-xs text-muted-foreground">Order Number</Label>
                                   <div>{job.tmOrderNumber || "-"}</div>
                                 </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Expiration</Label>
+                                  <div>
+                                    {job.expiresAt ? (
+                                      <>
+                                        <span className="font-mono">{formatExpiration(job.expiresAt).text}</span>
+                                        <span className="text-xs text-muted-foreground ml-2">
+                                          ({new Date(job.expiresAt * 1000).toLocaleTimeString()})
+                                        </span>
+                                      </>
+                                    ) : "-"}
+                                  </div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs text-muted-foreground">Attempts</Label>
+                                  <div>{job.attemptCount}</div>
+                                </div>
                                 {job.errorCode && (
-                                  <div className="col-span-3">
+                                  <div className="col-span-4">
                                     <Label className="text-xs text-muted-foreground">Error</Label>
                                     <div className="text-red-600">{job.errorCode}: {job.errorMessage}</div>
                                   </div>
                                 )}
                                 {job.finalUrl && (
-                                  <div className="col-span-3">
+                                  <div className="col-span-4">
                                     <Label className="text-xs text-muted-foreground">Final URL</Label>
                                     <div className="truncate">
                                       <a href={job.finalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{job.finalUrl}</a>
+                                    </div>
+                                  </div>
+                                )}
+                                {job.targetUrl && (
+                                  <div className="col-span-4">
+                                    <Label className="text-xs text-muted-foreground">Target URL</Label>
+                                    <div className="truncate">
+                                      <a href={job.targetUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{job.targetUrl}</a>
                                     </div>
                                   </div>
                                 )}
