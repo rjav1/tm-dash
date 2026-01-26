@@ -946,6 +946,9 @@ model CheckoutRun {
   endedAt      DateTime? @map("ended_at")
   lastHeartbeat DateTime? @map("last_heartbeat") // Updated by daemon every 10s to indicate liveness
   
+  // Worker count - how many parallel workers are running in this daemon
+  activeWorkerCount Int   @default(1) @map("active_worker_count")
+  
   // Stats
   jobsQueued   Int       @default(0) @map("jobs_queued")
   jobsSuccess  Int       @default(0) @map("jobs_success")

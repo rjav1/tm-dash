@@ -116,6 +116,7 @@ export async function GET(request: NextRequest) {
         workerId: true,
         startedAt: true,
         lastHeartbeat: true,
+        activeWorkerCount: true,
         jobsSuccess: true,
         jobsFailed: true,
         _count: { select: { jobs: true } },
@@ -221,6 +222,7 @@ export async function GET(request: NextRequest) {
             workerId: run.workerId,
             startedAt: run.startedAt,
             lastHeartbeat: run.lastHeartbeat?.toISOString() || null,
+            activeWorkerCount: run.activeWorkerCount, // How many parallel workers in this daemon
             jobsProcessed: run._count.jobs,
             jobsSuccess: run.jobsSuccess,
             jobsFailed: run.jobsFailed,

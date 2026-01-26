@@ -126,6 +126,7 @@ interface WorkerRun {
   workerId: string;
   startedAt: string;
   lastHeartbeat?: string | null;
+  activeWorkerCount?: number;
   jobsProcessed: number;
   jobsSuccess: number;
   jobsFailed: number;
@@ -943,6 +944,11 @@ export default function CheckoutPage() {
                             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                           )}
                           <span className="font-mono text-sm font-medium">{worker.workerId}</span>
+                          {worker.activeWorkerCount && worker.activeWorkerCount > 1 && !worker.isStale && (
+                            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">
+                              {worker.activeWorkerCount} threads
+                            </Badge>
+                          )}
                           {worker.isStale && (
                             <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs">
                               <AlertCircle className="w-3 h-3 mr-1" />
