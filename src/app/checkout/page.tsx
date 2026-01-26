@@ -657,8 +657,9 @@ export default function CheckoutPage() {
     return stats.workers.runs.some(w => !w.isStale);
   }, [stats?.workers?.runs]);
   
-  // Workers are considered offline if not connected OR all workers are stale
-  const isOffline = !isRealtimeConnected || !hasActiveWorkers;
+  // Controls are disabled only if NO workers are active
+  // (Realtime connection is just for live updates, not worker availability)
+  const isOffline = !hasActiveWorkers;
   
   if (loading) {
     return (

@@ -91,6 +91,23 @@ export async function GET(request: NextRequest) {
     // Get active workers (runs in RUNNING status) with their current jobs
     // Workers send heartbeat every 10s, so we check for heartbeat within last 30s
     const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    
+    // Auto-abort runs that have been stale for more than 5 minutes (no heartbeat)
+    // This cleans up orphaned runs from crashed daemons
+    await prisma.checkoutRun.updateMany({
+      where: {
+        status: "RUNNING",
+        OR: [
+          { lastHeartbeat: null, startedAt: { lt: fiveMinutesAgo } },
+          { lastHeartbeat: { lt: fiveMinutesAgo } },
+        ],
+      },
+      data: {
+        status: "ABORTED",
+        endedAt: new Date(),
+      },
+    });
     
     const activeRuns = await prisma.checkoutRun.findMany({
       where: { status: "RUNNING" },
