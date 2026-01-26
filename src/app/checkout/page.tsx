@@ -193,7 +193,7 @@ interface CheckoutConfig {
   browser_proxy?: string;
 }
 
-// Format exact local time with hours and minutes
+// Format exact local time with hours, minutes, and seconds
 function formatExactTime(dateString: string): string {
   const date = new Date(dateString);
   return date.toLocaleString(undefined, {
@@ -201,6 +201,7 @@ function formatExactTime(dateString: string): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    second: "2-digit",
     hour12: true,
   });
 }
