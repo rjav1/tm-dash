@@ -27,6 +27,7 @@ import {
   FileText,
   CreditCard,
   Activity,
+  Radio,
   X,
   Check,
   AlertTriangle,
@@ -159,6 +160,10 @@ interface CheckoutStats {
     active: number;
     runs: WorkerRun[];
     runningJobs?: number;
+  };
+  listener: {
+    online: boolean;
+    lastSeen: string | null;
   };
   cards: {
     available: number;
@@ -756,11 +761,23 @@ export default function CheckoutPage() {
           <p className="text-muted-foreground">Monitor and manage automated checkouts</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Discord Listener status */}
+          {stats?.listener?.online ? (
+            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+              <Radio className="w-3 h-3 mr-1" />
+              Listener
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="bg-gray-50 text-gray-500" title={stats?.listener?.lastSeen ? `Last seen: ${formatExactTime(stats.listener.lastSeen)}` : "Never connected"}>
+              <Radio className="w-3 h-3 mr-1" />
+              Listener Offline
+            </Badge>
+          )}
           {/* Worker status - primary indicator */}
           {hasActiveWorkers ? (
             <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
               <Activity className="w-3 h-3 mr-1" />
-              Workers Online ({stats?.workers?.runs?.filter(w => !w.isStale).length || 0})
+              Workers ({stats?.workers?.runs?.filter(w => !w.isStale).length || 0})
             </Badge>
           ) : stats?.workers?.runs && stats.workers.runs.length > 0 ? (
             <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">

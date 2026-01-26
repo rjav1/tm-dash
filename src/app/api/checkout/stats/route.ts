@@ -172,6 +172,25 @@ export async function GET(request: NextRequest) {
     const queuedCount = statusMap["QUEUED"] || 0;
     const runningCount = statusMap["RUNNING"] || 0;
 
+    // Check Discord listener heartbeat
+    const listenerHeartbeat = await prisma.checkoutConfig.findUnique({
+      where: { key: "discord_listener_heartbeat" },
+    });
+    
+    let listenerOnline = false;
+    let listenerLastSeen: string | null = null;
+    
+    if (listenerHeartbeat?.value) {
+      try {
+        const heartbeatTime = new Date(listenerHeartbeat.value);
+        listenerLastSeen = heartbeatTime.toISOString();
+        // Listener is online if heartbeat within last 30 seconds
+        listenerOnline = heartbeatTime > thirtySecondsAgo;
+      } catch {
+        // Invalid date format
+      }
+    }
+
     return NextResponse.json({
       period,
       overview: {
@@ -219,6 +238,10 @@ export async function GET(request: NextRequest) {
         }),
         // Also include jobs being processed by workers not in a run session
         runningJobs: runningJobs.length,
+      },
+      listener: {
+        online: listenerOnline,
+        lastSeen: listenerLastSeen,
       },
       cards: {
         available: cardsAvailable,
