@@ -1,3 +1,24 @@
+/**
+ * Purchases API Route
+ *
+ * Handles CRUD operations for purchases and calculates per-purchase profit metrics.
+ *
+ * =============================================================================
+ * PROFIT CALCULATION NOTE
+ * =============================================================================
+ * This API calculates per-purchase profit for display purposes.
+ * It uses salePrice * feeMultiplier as an ESTIMATE.
+ *
+ * For accurate TOTAL profit (dashboard, reporting), use invoice aggregates:
+ *   Sum(invoice.totalAmount) - Sum(invoice.totalCost)
+ *
+ * The per-purchase estimates here may vary slightly from actual invoice totals.
+ * This is acceptable for showing individual purchase performance.
+ *
+ * See: docs/PROFIT_CALCULATION.md for full explanation.
+ * =============================================================================
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { PurchaseStatus } from "@prisma/client";
@@ -726,10 +747,25 @@ export async function GET(request: NextRequest) {
         }>;
       }> }).listings || [];
       
-      // Aggregate sale data across all listings linked to this purchase
+      // =========================================================================
+      // Per-Purchase Profit Calculation (ESTIMATE)
+      // =========================================================================
+      // NOTE: This calculates profit PER PURCHASE for display purposes.
+      // We use salePrice * feeMultiplier here because we need per-purchase breakdown.
+      // 
+      // For TOTAL profit (dashboard, sales page), always use invoice aggregates:
+      //   Sum(invoice.totalAmount) - Sum(invoice.totalCost)
+      //
+      // The per-purchase calculation here is an ESTIMATE and may have slight
+      // variations from the actual invoice totals. This is acceptable for
+      // per-purchase display but NOT for overall profit reporting.
+      //
+      // See: docs/PROFIT_CALCULATION.md for full explanation.
+      // =========================================================================
+      
       let soldQuantity = 0;
-      let actualRevenue = 0;
-      let actualPayout = 0; // Net after fees
+      let actualRevenue = 0;       // Gross revenue (sale prices before fees)
+      let actualPayout = 0;        // Estimated net payout (after fees)
       let isSold = false;
       let saleDate: Date | null = null;
       let payoutStatus: string | null = null;
@@ -737,19 +773,16 @@ export async function GET(request: NextRequest) {
       for (const listing of listings) {
         for (const sale of listing.sales) {
           soldQuantity += sale.quantity;
-          // NOTE: sale.salePrice is already the TOTAL sale price for all tickets in this sale
-          // (from TicketVault's Total field), so do NOT multiply by quantity
+          // sale.salePrice is the TOTAL sale price for all tickets in this sale
+          // (from TicketVault's "Total" field), so do NOT multiply by quantity
           actualRevenue += Number(sale.salePrice);
           
-          // Use invoice totalAmount (net payout after marketplace fees) when available
-          if (sale.invoice) {
-            // Invoice totalAmount is the net payout after fees
-            // salePrice is already total, so apply fee rate directly
-            actualPayout += Number(sale.salePrice) * feeMultiplier;
-            payoutStatus = sale.invoice.payoutStatus || payoutStatus;
-          } else {
-            // No invoice yet, estimate payout
-            actualPayout += Number(sale.salePrice) * feeMultiplier;
+          // Estimate payout by applying fee multiplier to gross sale price
+          // NOTE: This is an estimate. For accurate totals, use invoice aggregates.
+          actualPayout += Number(sale.salePrice) * feeMultiplier;
+          
+          if (sale.invoice?.payoutStatus) {
+            payoutStatus = sale.invoice.payoutStatus;
           }
           
           if (sale.saleDate && (!saleDate || sale.saleDate > saleDate)) {

@@ -1,3 +1,36 @@
+/**
+ * Dashboard Statistics API
+ *
+ * Returns comprehensive stats for the main dashboard including:
+ * - Basic counts (accounts, cards, events, purchases)
+ * - Profit calculations (realized and unrealized)
+ * - Time-based trends (daily, weekly)
+ * - Operational metrics (jobs, queues, card health)
+ *
+ * =============================================================================
+ * PROFIT CALCULATION
+ * =============================================================================
+ *
+ * Realized Profit (from completed sales):
+ *   Calculated from INVOICES, not individual sales.
+ *   Profit = Sum(invoice.totalAmount) - Sum(invoice.totalCost)
+ *
+ *   - invoice.totalAmount = NET payout (after TicketVault fees)
+ *   - invoice.totalCost = Our purchase cost
+ *
+ * Why we use invoices instead of sales:
+ *   1. One invoice can have multiple sales (buyer purchased from multiple listings)
+ *   2. invoice.totalAmount is the actual net payout - no fee estimation needed
+ *   3. Matches exactly what TicketVault shows when summing invoices
+ *
+ * Unrealized Profit (from unsold inventory):
+ *   Estimated from listings that haven't sold yet.
+ *   Uses current listing price and original purchase cost.
+ *
+ * See: prisma/schema.prisma and src/lib/services/sales-sync.ts for more details.
+ * =============================================================================
+ */
+
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { PurchaseStatus, TicketStatus } from "@prisma/client";

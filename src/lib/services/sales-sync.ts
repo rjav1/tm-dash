@@ -6,6 +6,51 @@
  * 2. Syncing invoices to local database
  * 3. Linking sales to listings and invoices
  * 4. Linking tickets to sales
+ *
+ * =============================================================================
+ * CRITICAL: PROFIT CALCULATION DOCUMENTATION
+ * =============================================================================
+ *
+ * Data Model Hierarchy:
+ *   Purchase -> Listing -> Sale -> Invoice
+ *
+ * Key Relationships:
+ * - One Invoice can contain MULTIPLE Sales
+ *   (Example: A buyer purchases tickets from 2 of our listings in one transaction
+ *   = 1 Invoice with 2 Sales)
+ * - One Sale belongs to exactly ONE Invoice
+ * - One Listing can have MULTIPLE Sales (partial quantity sold over time)
+ *
+ * PROFIT CALCULATION - THE RIGHT WAY:
+ * ------------------------------------
+ * Total Profit = Sum(invoice.totalAmount) - Sum(invoice.totalCost)
+ *
+ * Where:
+ * - invoice.totalAmount = NET payout from TicketVault (AFTER their fees)
+ *   This is synced from TicketVault's "Payout" field
+ * - invoice.totalCost = Our purchase cost for the tickets
+ *
+ * This matches exactly what TicketVault shows when you sum your invoices.
+ *
+ * PROFIT CALCULATION - THE WRONG WAY (DO NOT DO THIS):
+ * -----------------------------------------------------
+ * ❌ Sum(sale.salePrice * feeMultiplier) - Sum(sale.cost * sale.quantity)
+ *
+ * Why this is wrong:
+ * 1. sale.salePrice is GROSS (before fees), and fee estimation is imprecise
+ * 2. If an Invoice contains multiple Sales, you can't accurately split the
+ *    invoice's net payout across individual sales
+ * 3. The invoice.totalAmount is the actual net payout - use it directly!
+ *
+ * HISTORICAL BUG (Fixed Jan 2026):
+ * --------------------------------
+ * Previous code was using invoice.totalAmount PER SALE, which caused
+ * double-counting when one invoice had multiple sales. For example:
+ *   Invoice #123: totalAmount = $500, contains Sale A and Sale B
+ *   Bug: Added $500 for Sale A AND $500 for Sale B = $1000 (wrong!)
+ *   Fix: Sum invoices directly = $500 (correct!)
+ *
+ * =============================================================================
  */
 
 import prisma from "@/lib/db";
@@ -39,13 +84,23 @@ export interface InvoicesSyncResult {
   error?: string;
 }
 
+/**
+ * Sales Statistics
+ *
+ * IMPORTANT: Revenue, Cost, and Profit are calculated from INVOICES, not Sales.
+ * This ensures our numbers match exactly what TicketVault shows.
+ *
+ * - totalRevenue = Sum of invoice.totalAmount (net payout after fees)
+ * - totalCost = Sum of invoice.totalCost (our purchase cost)
+ * - totalProfit = totalRevenue - totalCost
+ */
 export interface SalesStats {
   totalSales: number;
-  pendingSales: number;
-  completedSales: number;
-  totalRevenue: number;
-  totalCost: number;
-  totalProfit: number;
+  pendingSales: number;       // Status 20 (Pending) or 40 (Alert)
+  completedSales: number;     // Status 1 (Complete) or isComplete flag
+  totalRevenue: number;       // From invoices - NET payout after fees
+  totalCost: number;          // From invoices - our purchase cost
+  totalProfit: number;        // totalRevenue - totalCost
   avgProfitPerDay: number;
   daysWithSales: number;
 }

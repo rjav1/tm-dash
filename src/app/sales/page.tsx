@@ -1,3 +1,30 @@
+/**
+ * Sales Page
+ *
+ * Displays sales queue and invoice data from TicketVault.
+ *
+ * =============================================================================
+ * PROFIT CALCULATION
+ * =============================================================================
+ *
+ * This page has TWO sources of profit data:
+ *
+ * 1. salesStats (from server API):
+ *    - Accurate totals calculated from invoice aggregates
+ *    - Use for: Total Profit card, official reporting
+ *
+ * 2. enhancedMetrics (client-side calculation):
+ *    - Estimates calculated from current page's sales data
+ *    - Uses salePrice * 0.93 as fee estimate
+ *    - Use for: Per-page breakdown, win/loss ratios on visible items
+ *
+ * For accurate TOTAL profit, always rely on salesStats from the API.
+ * The client-side enhancedMetrics are estimates for the current page only.
+ *
+ * See: docs/PROFIT_CALCULATION.md for full explanation.
+ * =============================================================================
+ */
+
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";

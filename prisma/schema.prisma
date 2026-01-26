@@ -507,6 +507,31 @@ model Listing {
 // ========================================
 // Sales & Invoices - From TicketVault
 // ========================================
+//
+// IMPORTANT: Data Model & Profit Calculation
+// ------------------------------------------
+// 
+// Hierarchy: Purchase -> Listing -> Sale -> Invoice
+//
+// KEY RELATIONSHIPS:
+// - One Invoice can have MULTIPLE Sales (e.g., buyer purchases from 2 listings = 1 invoice, 2 sales)
+// - One Sale belongs to exactly ONE Invoice
+// - One Listing can have MULTIPLE Sales (partial quantity sales)
+// - One Purchase can have MULTIPLE Listings (resold on different platforms)
+//
+// PROFIT CALCULATION - ALWAYS USE INVOICES:
+// -----------------------------------------
+// Total Profit = Sum(invoice.totalAmount) - Sum(invoice.totalCost)
+//
+// - invoice.totalAmount = Net payout from TicketVault (AFTER their fees are deducted)
+// - invoice.totalCost = Our purchase cost (synced from TicketVault)
+//
+// WARNING: DO NOT calculate profit from Sales by summing sale.salePrice!
+// sale.salePrice is the GROSS amount for that sale (before fees).
+// If you try to estimate fees per-sale and there are multiple sales per invoice,
+// you'll get calculation errors. Always aggregate at the invoice level.
+//
+// ========================================
 
 model Sale {
   id                String    @id @default(cuid())
@@ -528,8 +553,10 @@ model Sale {
   quantity          Int                                     // Tickets sold in this sale
   
   // Pricing
-  salePrice         Decimal   @map("sale_price") @db.Decimal(10, 2)
-  cost              Decimal?  @map("cost") @db.Decimal(10, 2)
+  // NOTE: salePrice is GROSS (before fees). Do NOT use for profit calculation!
+  // Use invoice.totalAmount instead which is net after TicketVault fees.
+  salePrice         Decimal   @map("sale_price") @db.Decimal(10, 2) // GROSS - before marketplace fees
+  cost              Decimal?  @map("cost") @db.Decimal(10, 2)       // PER-TICKET cost (multiply by quantity for total)
   
   // Buyer info
   buyerEmail        String?   @map("buyer_email")
@@ -580,6 +607,13 @@ model Sale {
   @@map("sales")
 }
 
+// Invoice - The SOURCE OF TRUTH for profit calculations
+// 
+// Each Invoice represents a complete transaction with a buyer.
+// An Invoice may contain MULTIPLE Sales (if buyer purchased from multiple listings).
+//
+// PROFIT FORMULA: Sum(totalAmount) - Sum(totalCost)
+// This matches exactly what you see in TicketVault when summing invoices.
 model Invoice {
   id                String    @id @default(cuid())
   
@@ -598,10 +632,19 @@ model Invoice {
   // Ticket summary
   totalQuantity     Int       @default(0) @map("total_quantity")
   
-  // Financials
-  totalAmount       Decimal   @map("total_amount") @db.Decimal(10, 2)
+  // ========================================
+  // FINANCIAL FIELDS - Use these for profit!
+  // ========================================
+  // totalAmount: NET payout after TicketVault fees (from TV "Payout" field)
+  //              This is what you actually receive.
+  // fees:        TicketVault's marketplace fee amount
+  // totalCost:   Our purchase cost (what we paid for the tickets)
+  //
+  // PROFIT = totalAmount - totalCost
+  // ========================================
+  totalAmount       Decimal   @map("total_amount") @db.Decimal(10, 2)  // NET payout (after fees)
   fees              Decimal   @default(0) @map("fees") @db.Decimal(10, 2)
-  totalCost         Decimal   @default(0) @map("total_cost") @db.Decimal(10, 2)
+  totalCost         Decimal   @default(0) @map("total_cost") @db.Decimal(10, 2) // Our purchase cost
   
   // Payment/Payout status
   isPaid            Boolean   @default(false) @map("is_paid")
