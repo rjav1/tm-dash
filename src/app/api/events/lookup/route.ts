@@ -132,19 +132,31 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      if (existingEvent) {
-        searchArtist = searchArtist || existingEvent.artistName || null;
-        searchVenue = searchVenue || existingEvent.venue || null;
-        searchDate = searchDate || existingEvent.eventDateRaw || existingEvent.eventDate?.toISOString().split("T")[0] || null;
-        if (source !== "scrape") {
-          source = "database";
-        }
+      if (existingEvent && (existingEvent.eventName || existingEvent.artistName)) {
+        searchArtist = existingEvent.artistName || existingEvent.eventName || null;
+        searchVenue = existingEvent.venue || null;
+        searchDate = existingEvent.eventDateRaw || existingEvent.eventDate?.toISOString().split("T")[0] || null;
+        source = "database";
+        
+        // Create scrapedData from database to prevent Discovery API override
+        scrapedData = {
+          eventName: existingEvent.eventName || existingEvent.artistName || null,
+          artistName: existingEvent.artistName || null,
+          venue: existingEvent.venue || null,
+          venueCity: null,
+          venueState: null,
+          date: existingEvent.eventDateRaw || null,
+          time: null,
+          dayOfWeek: existingEvent.dayOfWeek || null,
+          url: `https://www.ticketmaster.com/event/${eventId}`,
+          scrapedAt: new Date().toISOString(),
+        };
       }
     }
 
     // Step 2b: If we still don't have data, try to get it from checkout jobs
     // The Discord webhook contains event info that's stored in checkout jobs
-    if (!searchArtist && eventId) {
+    if (!scrapedData?.eventName && eventId) {
       const checkoutJob = await prisma.checkoutJob.findFirst({
         where: { tmEventId: eventId },
         orderBy: { createdAt: "desc" },
@@ -174,63 +186,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 2c: If we have event info from DB/checkout jobs, try Discovery API for better data
-    let tmEvent: TicketmasterEvent | null = null;
-    if (searchArtist && !scrapedData?.eventName) {
-      console.log(`[Lookup] Trying Discovery API for: ${searchArtist}`);
-      try {
-        const isoDate = searchDate ? parseDateToISO(searchDate) : undefined;
-        tmEvent = await findMatchingEvent({
-          artistName: searchArtist,
-          venue: searchVenue || undefined,
-          date: isoDate || undefined,
-        });
-        
-        if (tmEvent) {
-          source = "api";
-          console.log(`[Lookup] Found via Discovery API: ${tmEvent.name}`);
-          
-          // Create scraped data from Discovery API result
-          scrapedData = {
-            eventName: tmEvent.name,
-            artistName: tmEvent.name.split(" - ")[0].split(":")[0].trim(),
-            venue: tmEvent.venue?.name || null,
-            venueCity: tmEvent.venue?.city || null,
-            venueState: tmEvent.venue?.stateCode || null,
-            date: tmEvent.date || null,
-            time: tmEvent.time || null,
-            dayOfWeek: null,
-            url: tmEvent.url || `https://www.ticketmaster.com/event/${eventId}`,
-            scrapedAt: new Date().toISOString(),
-          };
-          
-          // Format the date nicely
-          if (tmEvent.date) {
-            try {
-              const dateObj = new Date(tmEvent.date + "T12:00:00");
-              const formatted = dateObj.toLocaleDateString("en-US", {
-                month: "long",
-                day: "numeric",
-                year: "numeric",
-              });
-              scrapedData.date = formatted;
-              if (tmEvent.time) {
-                const timeFormatted = new Date(`2000-01-01T${tmEvent.time}`).toLocaleTimeString("en-US", {
-                  hour: "numeric",
-                  minute: "2-digit",
-                });
-                scrapedData.date += ` at ${timeFormatted}`;
-                scrapedData.time = timeFormatted;
-              }
-            } catch {
-              // Keep raw date
-            }
-          }
-        }
-      } catch (apiError) {
-        console.error("[Lookup] Discovery API error:", apiError);
-      }
-    }
+    // Note: Discovery API is disabled because it returns unreliable results
+    // (e.g., searching "Harry Styles" may return a dance party instead of the concert)
+    // We only use data from: scraping, database, or checkout jobs
+    const tmEvent: TicketmasterEvent | null = null;
 
     // Step 3: If we still don't have artist name, return error with helpful message
     if (!searchArtist) {
@@ -366,18 +325,30 @@ export async function GET(request: NextRequest) {
         },
       });
 
-      if (existingEvent) {
-        searchArtist = searchArtist || existingEvent.artistName || null;
-        searchVenue = searchVenue || existingEvent.venue || null;
-        searchDate = searchDate || existingEvent.eventDateRaw || existingEvent.eventDate?.toISOString().split("T")[0] || null;
-        if (source !== "scrape") {
-          source = "database";
-        }
+      if (existingEvent && (existingEvent.eventName || existingEvent.artistName)) {
+        searchArtist = existingEvent.artistName || existingEvent.eventName || null;
+        searchVenue = existingEvent.venue || null;
+        searchDate = existingEvent.eventDateRaw || existingEvent.eventDate?.toISOString().split("T")[0] || null;
+        source = "database";
+        
+        // Create scrapedData from database to prevent Discovery API override
+        scrapedData = {
+          eventName: existingEvent.eventName || existingEvent.artistName || null,
+          artistName: existingEvent.artistName || null,
+          venue: existingEvent.venue || null,
+          venueCity: null,
+          venueState: null,
+          date: existingEvent.eventDateRaw || null,
+          time: null,
+          dayOfWeek: existingEvent.dayOfWeek || null,
+          url: `https://www.ticketmaster.com/event/${eventId}`,
+          scrapedAt: new Date().toISOString(),
+        };
       }
     }
 
     // Step 2b: If we still don't have data, try to get it from checkout jobs
-    if (!searchArtist && eventId) {
+    if (!scrapedData?.eventName && eventId) {
       const checkoutJob = await prisma.checkoutJob.findFirst({
         where: { tmEventId: eventId },
         orderBy: { createdAt: "desc" },
@@ -406,59 +377,9 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Step 2c: If we have event info, try Discovery API for better data
-    let tmEvent: TicketmasterEvent | null = null;
-    if (searchArtist && !scrapedData?.eventName) {
-      console.log(`[Lookup GET] Trying Discovery API for: ${searchArtist}`);
-      try {
-        const isoDate = searchDate ? parseDateToISO(searchDate) : undefined;
-        tmEvent = await findMatchingEvent({
-          artistName: searchArtist,
-          venue: searchVenue || undefined,
-          date: isoDate || undefined,
-        });
-        
-        if (tmEvent) {
-          source = "api";
-          scrapedData = {
-            eventName: tmEvent.name,
-            artistName: tmEvent.name.split(" - ")[0].split(":")[0].trim(),
-            venue: tmEvent.venue?.name || null,
-            venueCity: tmEvent.venue?.city || null,
-            venueState: tmEvent.venue?.stateCode || null,
-            date: tmEvent.date || null,
-            time: tmEvent.time || null,
-            dayOfWeek: null,
-            url: tmEvent.url || `https://www.ticketmaster.com/event/${eventId}`,
-            scrapedAt: new Date().toISOString(),
-          };
-          
-          if (tmEvent.date) {
-            try {
-              const dateObj = new Date(tmEvent.date + "T12:00:00");
-              const formatted = dateObj.toLocaleDateString("en-US", {
-                month: "long",
-                day: "numeric",
-                year: "numeric",
-              });
-              scrapedData.date = formatted;
-              if (tmEvent.time) {
-                const timeFormatted = new Date(`2000-01-01T${tmEvent.time}`).toLocaleTimeString("en-US", {
-                  hour: "numeric",
-                  minute: "2-digit",
-                });
-                scrapedData.date += ` at ${timeFormatted}`;
-                scrapedData.time = timeFormatted;
-              }
-            } catch {
-              // Keep raw date
-            }
-          }
-        }
-      } catch (apiError) {
-        console.error("[Lookup GET] Discovery API error:", apiError);
-      }
-    }
+    // Note: Discovery API disabled - returns unreliable/wrong results
+    // (e.g., searching "Harry Styles" returned a dance party instead of the actual concert)
+    const tmEvent: TicketmasterEvent | null = null;
 
     if (!searchArtist) {
       return NextResponse.json(
