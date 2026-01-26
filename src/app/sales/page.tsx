@@ -372,9 +372,13 @@ export default function SalesPage() {
   // =============================================================================
   
   // Calculate enhanced metrics from current page data
+  // NOTE: These are page-level stats only. Official totals come from salesStats (server-side).
+  // For per-sale profit, we use salePrice * 0.93 (7% fee) as an estimate since we can't
+  // use invoice.totalAmount (that's per-invoice, not per-sale, and would double-count).
   const enhancedMetrics = useMemo(() => {
     if (!sales.length) return null;
     
+    const feeMultiplier = 0.93; // 7% marketplace fee
     let totalCost = 0;
     let totalRevenue = 0;
     let profitableSales = 0;
@@ -388,8 +392,9 @@ export default function SalesPage() {
       // Cost priority: sale.cost > listing.cost > purchase.priceEach
       const unitCost = Number(sale.cost || sale.listing?.cost || sale.listing?.purchase?.priceEach || 0);
       const saleTotalCost = unitCost * sale.quantity;
-      // Use invoice totalAmount (net payout after fees) if available
-      const netPayout = Number(sale.invoice?.totalAmount || sale.salePrice || 0);
+      // Use salePrice * feeMultiplier for net payout estimate
+      // DO NOT use invoice.totalAmount - that's per-invoice, not per-sale!
+      const netPayout = Number(sale.salePrice || 0) * feeMultiplier;
       
       // Track sales with missing cost
       if (unitCost === 0) missingCostCount++;

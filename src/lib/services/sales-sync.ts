@@ -530,26 +530,15 @@ export async function syncAllFromPos(): Promise<{
  * - Status 40 = Alert (confirmed, awaiting delivery)
  * - Status 20 = Pending (not confirmed)
  * 
- * IMPORTANT: invoice.totalAmount is for the ENTIRE invoice (which can contain multiple sales).
- * We must NOT use invoice.totalAmount per sale, or we'll double-count.
- * Instead, use sale.salePrice (gross) and apply marketplace fee to get net payout.
+ * IMPORTANT: We calculate profit directly from INVOICES, not from sales.
+ * This ensures our numbers match exactly what the user sees in TicketVault.
+ * Invoice has:
+ *   - totalAmount: Net payout (after TicketVault fees)
+ *   - totalCost: Our purchase cost
+ * Profit = Sum(totalAmount) - Sum(totalCost)
  */
 export async function getSalesStats(): Promise<SalesStats> {
-  // Get marketplace fee setting
-  let marketplaceFeePercentage = 7; // Default 7%
-  try {
-    const feeSetting = await prisma.setting.findUnique({
-      where: { key: "marketplace_fee_percentage" },
-    });
-    if (feeSetting) {
-      marketplaceFeePercentage = parseFloat(feeSetting.value);
-    }
-  } catch {
-    // Settings table might not exist, use default
-  }
-  const feeMultiplier = 1 - (marketplaceFeePercentage / 100); // e.g., 0.93 for 7%
-
-  const [totalSales, pendingSales, completedSales, salesWithData] =
+  const [totalSales, pendingSales, completedSales, salesWithDates, invoiceAggregates] =
     await Promise.all([
       prisma.sale.count(),
       // Pending = Status 40 (Alert) + Status 20 (Pending) - not delivered yet
@@ -570,47 +559,30 @@ export async function getSalesStats(): Promise<SalesStats> {
           ],
         } 
       }),
-      // Get all data needed for stats
+      // Get sale dates for days tracking
       prisma.sale.findMany({
         select: {
-          salePrice: true,
-          cost: true,
-          quantity: true,
           saleDate: true,
-          listing: {
-            select: {
-              cost: true,
-              purchase: {
-                select: {
-                  priceEach: true,
-                },
-              },
-            },
-          },
+        },
+      }),
+      // Get totals directly from invoices - this matches TicketVault exactly
+      prisma.invoice.aggregate({
+        where: { isCancelled: false },
+        _sum: {
+          totalAmount: true, // Net payout after fees
+          totalCost: true,   // Our purchase cost
         },
       }),
     ]);
 
-  // Calculate total revenue (net payout), cost, and unique days
-  let totalRevenue = 0;
-  let totalCost = 0;
+  // Revenue and cost directly from invoices - matches TicketVault
+  const totalRevenue = Number(invoiceAggregates._sum.totalAmount || 0);
+  const totalCost = Number(invoiceAggregates._sum.totalCost || 0);
+  const totalProfit = totalRevenue - totalCost;
+
+  // Track unique days from sales
   const uniqueDays = new Set<string>();
-  
-  for (const sale of salesWithData) {
-    // Revenue: sale.salePrice is GROSS (total for this sale before fees)
-    // Apply marketplace fee to get net payout per sale
-    // DO NOT use invoice.totalAmount - that's for the entire invoice which may have multiple sales!
-    const grossSalePrice = Number(sale.salePrice || 0);
-    const netPayout = grossSalePrice * feeMultiplier;
-    totalRevenue += netPayout;
-    
-    // Cost priority: sale.cost > listing.cost > purchase.priceEach
-    // These are all PER-TICKET costs, so multiply by quantity
-    const unitCost = Number(sale.cost || sale.listing?.cost || sale.listing?.purchase?.priceEach || 0);
-    const saleTotalCost = unitCost * (sale.quantity || 1);
-    totalCost += saleTotalCost;
-    
-    // Track unique days
+  for (const sale of salesWithDates) {
     if (sale.saleDate) {
       const dateStr = new Date(sale.saleDate).toISOString().split('T')[0];
       uniqueDays.add(dateStr);
@@ -618,7 +590,6 @@ export async function getSalesStats(): Promise<SalesStats> {
   }
   
   const daysWithSales = uniqueDays.size || 1; // Avoid division by zero
-  const totalProfit = totalRevenue - totalCost;
   const avgProfitPerDay = totalProfit / daysWithSales;
 
   return {
