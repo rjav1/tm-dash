@@ -153,13 +153,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Look up account if email provided
+    // Look up account if email provided, auto-link cards as needed
     let accountId: string | null = null;
     let cardId: string | null = null;
     let cardLast4: string | null = null;
 
+    // Check if auto_link_cards is enabled (default: true)
+    const autoLinkConfig = await prisma.checkoutConfig.findUnique({
+      where: { key: "auto_link_cards" },
+    });
+    const autoLinkCards = autoLinkConfig?.value !== "false";
+
     if (accountEmail) {
-      const account = await prisma.account.findUnique({
+      // Try to find existing account
+      let account = await prisma.account.findUnique({
         where: { email: accountEmail.toLowerCase() },
         include: {
           cards: {
@@ -173,6 +180,26 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // If no account exists and auto-link is enabled, create one
+      if (!account && autoLinkCards) {
+        account = await prisma.account.create({
+          data: {
+            email: accountEmail.toLowerCase(),
+            status: "ACTIVE",
+          },
+          include: {
+            cards: {
+              where: {
+                deletedAt: null,
+                checkoutStatus: "AVAILABLE",
+              },
+              orderBy: { createdAt: "asc" },
+              take: 1,
+            },
+          },
+        });
+      }
+
       if (account) {
         accountId = account.id;
 
@@ -181,7 +208,44 @@ export async function POST(request: NextRequest) {
           const card = account.cards[0];
           cardId = card.id;
           cardLast4 = card.cardNumber.slice(-4);
+        } else if (autoLinkCards) {
+          // Account has no cards - find an unlinked available card and link it
+          const availableCard = await prisma.card.findFirst({
+            where: {
+              accountId: null,
+              checkoutStatus: "AVAILABLE",
+              deletedAt: null,
+            },
+            orderBy: { createdAt: "asc" },
+          });
+
+          if (availableCard) {
+            // Link the card to this account
+            await prisma.card.update({
+              where: { id: availableCard.id },
+              data: { accountId: account.id },
+            });
+
+            cardId = availableCard.id;
+            cardLast4 = availableCard.cardNumber.slice(-4);
+          }
         }
+      }
+    } else if (autoLinkCards) {
+      // No email provided - just find any available unlinked card
+      const availableCard = await prisma.card.findFirst({
+        where: {
+          accountId: null,
+          checkoutStatus: "AVAILABLE",
+          deletedAt: null,
+        },
+        orderBy: { createdAt: "asc" },
+      });
+
+      if (availableCard) {
+        cardId = availableCard.id;
+        cardLast4 = availableCard.cardNumber.slice(-4);
+        // Note: card stays unlinked since we have no account
       }
     }
 
