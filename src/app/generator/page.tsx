@@ -342,7 +342,7 @@ export default function GeneratorPage() {
   const [emailStats, setEmailStats] = useState<PoolStats>({ AVAILABLE: 0, IN_USE: 0, USED: 0 });
   const [newEmails, setNewEmails] = useState("");
   const [addingEmails, setAddingEmails] = useState(false);
-  const [selectedEmailProvider, setSelectedEmailProvider] = useState<string>("");
+  const [selectedEmailProvider, setSelectedEmailProvider] = useState<string>("__auto__");
 
   // Proxy pool state
   const [proxies, setProxies] = useState<GeneratorProxy[]>([]);
@@ -603,7 +603,7 @@ export default function GeneratorPage() {
       const response = await fetch("/api/generator/emails", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ emails: newEmails, imapProvider: selectedEmailProvider || null }),
+        body: JSON.stringify({ emails: newEmails, imapProvider: selectedEmailProvider === "__auto__" ? null : selectedEmailProvider }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
@@ -1472,7 +1472,7 @@ export default function GeneratorPage() {
                   <Select value={selectedEmailProvider} onValueChange={setSelectedEmailProvider}>
                     <SelectTrigger><SelectValue placeholder="Auto-detect" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Auto-detect</SelectItem>
+                      <SelectItem value="__auto__">Auto-detect</SelectItem>
                       <SelectItem value="aycd">AYCD Inbox</SelectItem>
                       <SelectItem value="gmail">Gmail IMAP</SelectItem>
                       {imapProviders.filter(p => p.isEnabled).map(p => (
