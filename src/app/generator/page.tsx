@@ -353,7 +353,7 @@ export default function GeneratorPage() {
 
   // Tags state
   const [tags, setTags] = useState<AccountTag[]>([]);
-  const [selectedTagId, setSelectedTagId] = useState<string>("");
+  const [selectedTagId, setSelectedTagId] = useState<string>("__none__");
   const [newTagName, setNewTagName] = useState("");
   const [newTagColor, setNewTagColor] = useState("#3b82f6");
   const [creatingTag, setCreatingTag] = useState(false);
@@ -727,7 +727,7 @@ export default function GeneratorPage() {
           emailCount: parseInt(emailCount, 10),
           imapProvider,
           autoImport,
-          tagId: selectedTagId || null,
+          tagId: selectedTagId === "__none__" ? null : selectedTagId,
         }),
       });
       const data = await response.json();
@@ -1345,7 +1345,7 @@ export default function GeneratorPage() {
                     <Select value={selectedTagId} onValueChange={setSelectedTagId}>
                       <SelectTrigger className="flex-1"><SelectValue placeholder="Select tag..." /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">No tag</SelectItem>
+                        <SelectItem value="__none__">No tag</SelectItem>
                         {tags.map((tag) => (
                           <SelectItem key={tag.id} value={tag.id}>
                             <div className="flex items-center gap-2">
@@ -2055,7 +2055,7 @@ export default function GeneratorPage() {
               <span className="text-muted-foreground">Auto Import:</span>
               <span className="font-medium">{autoImport ? "Yes" : "No"}</span>
             </div>
-            {selectedTagId && (
+            {selectedTagId && selectedTagId !== "__none__" && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Tag:</span>
                 <span className="font-medium">{tags.find(t => t.id === selectedTagId)?.name}</span>
