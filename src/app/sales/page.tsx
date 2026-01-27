@@ -125,6 +125,7 @@ interface Sale {
       id: string;
       dashboardPoNumber: string | null;
       totalPrice: number | null;
+      quantity: number;
       priceEach: number | null;
       cardId: string | null;
       card: {
@@ -175,6 +176,7 @@ interface InvoiceSale {
       id: string;
       dashboardPoNumber: string | null;
       totalPrice: number | null;
+      quantity: number;
       priceEach: number | null;
       cardId: string | null;
       card: {
@@ -428,8 +430,12 @@ export default function SalesPage() {
     let missingCostCount = 0;
     
     sales.forEach((sale) => {
-      // Cost priority: sale.cost > listing.cost > purchase.priceEach
-      const unitCost = Number(sale.cost || sale.listing?.cost || sale.listing?.purchase?.priceEach || 0);
+      // Cost priority: sale.cost > listing.cost > (purchase.totalPrice / quantity)
+      // Use totalPrice/quantity for true cost with fees, not priceEach (which may be pre-fees)
+      const purchaseCost = sale.listing?.purchase?.totalPrice && sale.listing?.purchase?.quantity
+        ? Number(sale.listing.purchase.totalPrice) / sale.listing.purchase.quantity
+        : 0;
+      const unitCost = Number(sale.cost || sale.listing?.cost || purchaseCost);
       const saleTotalCost = unitCost * sale.quantity;
       // Use salePrice * feeMultiplier for net payout estimate
       // DO NOT use invoice.totalAmount - that's per-invoice, not per-sale!
@@ -1311,8 +1317,12 @@ export default function SalesPage() {
                   sales.map((sale) => {
                     const poNumber = sale.extPONumber || sale.listing?.extPONumber || sale.listing?.purchase?.dashboardPoNumber || null;
                     const accountEmail = sale.listing?.accountEmail || sale.listing?.purchase?.account?.email || null;
-                    // Cost priority: sale.cost > listing.cost > purchase.priceEach
-                    const unitCost = Number(sale.cost || sale.listing?.cost || sale.listing?.purchase?.priceEach || 0);
+                    // Cost priority: sale.cost > listing.cost > (purchase.totalPrice / quantity)
+                    // Use totalPrice/quantity for true cost with fees, not priceEach (which may be pre-fees)
+                    const purchaseCost = sale.listing?.purchase?.totalPrice && sale.listing?.purchase?.quantity
+                      ? Number(sale.listing.purchase.totalPrice) / sale.listing.purchase.quantity
+                      : 0;
+                    const unitCost = Number(sale.cost || sale.listing?.cost || purchaseCost);
                     const totalCost = unitCost * sale.quantity;
                     // Use invoice totalAmount (net payout after fees) if available, else fall back to salePrice
                     const netPayout = Number(sale.invoice?.totalAmount || sale.salePrice || 0);

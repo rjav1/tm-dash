@@ -125,6 +125,7 @@ export async function GET(request: NextRequest) {
                   id: true,
                   dashboardPoNumber: true,
                   totalPrice: true,
+                  quantity: true,
                   priceEach: true,
                   cardId: true,
                   card: {
@@ -178,6 +179,7 @@ export async function GET(request: NextRequest) {
               id: true,
               dashboardPoNumber: true,
               totalPrice: true,
+              quantity: true,
               priceEach: true,
               cardId: true,
               card: {
@@ -198,13 +200,17 @@ export async function GET(request: NextRequest) {
           
           if (purchase) {
             // Create a synthetic listing object with the purchase data
+            // Calculate true cost from totalPrice/quantity (includes fees)
+            const trueCost = purchase.totalPrice && purchase.quantity
+              ? Number(purchase.totalPrice) / purchase.quantity
+              : null;
             return {
               ...sale,
               listing: {
                 id: null,
                 extPONumber: sale.extPONumber,
                 accountEmail: purchase.account?.email || null,
-                cost: purchase.priceEach,
+                cost: trueCost,
                 purchaseId: purchase.id,
                 purchase,
               },
@@ -254,25 +260,29 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(formatSSE({
               type: "start",
               total: 0,
-              label: "Fetching sales from POS...",
+              label: "Syncing sales and invoices from POS...",
             })));
 
             try {
-              const result = await SalesSync.syncSalesFromPos();
+              const result = await SalesSync.syncAllFromPos();
 
-              if (result.success) {
+              if (result.sales.success) {
+                const salesMsg = `${result.sales.synced} sales (${result.sales.created} new, ${result.sales.updated} updated, ${result.sales.linked} linked)`;
+                const invoicesMsg = result.invoices.success 
+                  ? `${result.invoices.synced} invoices (${result.invoices.created} new, ${result.invoices.updated} updated)`
+                  : "invoices sync failed";
                 controller.enqueue(encoder.encode(formatSSE({
                   type: "complete",
-                  current: result.synced,
-                  total: result.synced,
-                  success: result.created + result.updated,
+                  current: result.sales.synced + result.invoices.synced,
+                  total: result.sales.synced + result.invoices.synced,
+                  success: result.sales.created + result.sales.updated + result.invoices.created + result.invoices.updated,
                   failed: 0,
-                  message: `Synced ${result.synced} sales (${result.created} new, ${result.updated} updated, ${result.linked} linked)`,
+                  message: `Synced ${salesMsg}, ${invoicesMsg}`,
                 })));
               } else {
                 controller.enqueue(encoder.encode(formatSSE({
                   type: "error",
-                  message: result.error || "Sync failed",
+                  message: result.sales.error || "Sync failed",
                 })));
               }
             } catch (error) {
@@ -289,16 +299,21 @@ export async function POST(request: NextRequest) {
         return new Response(stream, { headers: getStreamHeaders() });
       }
 
-      // Non-streaming fallback
-      const result = await SalesSync.syncSalesFromPos();
+      // Non-streaming fallback - sync both sales and invoices
+      const result = await SalesSync.syncAllFromPos();
       
-      const { success, error, ...restResult } = result;
+      const salesMsg = `${result.sales.synced} sales (${result.sales.created} new, ${result.sales.updated} updated, ${result.sales.linked} linked)`;
+      const invoicesMsg = result.invoices.success 
+        ? `${result.invoices.synced} invoices (${result.invoices.created} new, ${result.invoices.updated} updated)`
+        : "invoices sync failed";
+      
       return NextResponse.json({
-        success,
-        message: success
-          ? `Synced ${result.synced} sales (${result.created} new, ${result.updated} updated, ${result.linked} linked)`
-          : error,
-        ...restResult,
+        success: result.sales.success,
+        message: result.sales.success
+          ? `Synced ${salesMsg}, ${invoicesMsg}`
+          : result.sales.error,
+        sales: result.sales,
+        invoices: result.invoices,
       });
     }
     

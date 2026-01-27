@@ -374,6 +374,9 @@ export async function importPosTicketToDashboard(
     // Create the dashboard purchase
     const seats = `${tg.StartSeat}-${tg.EndSeat}`;
     const totalPrice = tg.CostPerTicket * tg.Quantity;
+    // Calculate priceEach from totalPrice/quantity to ensure consistency
+    // This ensures priceEach is always the true per-ticket cost
+    const priceEach = tg.Quantity > 0 ? totalPrice / tg.Quantity : 0;
 
     const newPurchase = await prisma.purchase.create({
       data: {
@@ -384,7 +387,7 @@ export async function importPosTicketToDashboard(
         row: tg.Row,
         seats,
         quantity: tg.Quantity,
-        priceEach: tg.CostPerTicket,
+        priceEach,
         totalPrice,
         posSyncedAt: new Date(),
         posTicketGroupId: parseInt(tg.Id, 10),
