@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
+import { ScrapeJobStatus, ScrapeJobType } from "@prisma/client";
 
 // Constants
 const SCRAPE_TIMEOUT_MS = 45000; // 45 seconds max
@@ -125,13 +126,14 @@ export async function POST(request: NextRequest) {
           
           const tmJob = await prisma.scrapeJob.create({
             data: {
-              type: "TICKETMASTER_EVENT",
-              status: "QUEUED",
+              type: ScrapeJobType.TICKETMASTER_EVENT,
+              status: ScrapeJobStatus.QUEUED,
               inputData: JSON.stringify({ eventId }),
               progress: JSON.stringify({ step: "queued", percent: 0, message: "Waiting for scraper..." }),
             },
           });
           tmJobId = tmJob.id;
+          console.log(`[Lookup Stream] Created TM scrape job: ${tmJobId}`);
         }
 
         // Poll for TM job completion
@@ -198,8 +200,8 @@ export async function POST(request: NextRequest) {
             
             const vsJob = await prisma.scrapeJob.create({
               data: {
-                type: "VIVID_SEATS_PRICE",
-                status: "QUEUED",
+                type: ScrapeJobType.VIVID_SEATS_PRICE,
+                status: ScrapeJobStatus.QUEUED,
                 inputData: JSON.stringify({
                   artistName: vsArtist,
                   venue: vsVenue,
@@ -209,6 +211,7 @@ export async function POST(request: NextRequest) {
               },
             });
             vsJobId = vsJob.id;
+            console.log(`[Lookup Stream] Created VS scrape job: ${vsJobId}`);
 
             // Poll for VS job completion
             const startTime = Date.now();

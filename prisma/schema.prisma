@@ -781,6 +781,10 @@ model GeneratorJob {
   startedAt    DateTime? @map("started_at")
   completedAt  DateTime? @map("completed_at")
 
+  // Run tracking (NEW - for daemon lifecycle)
+  runId        String?   @map("run_id")
+  priority     Int       @default(0) // Higher = processed first
+
   // Timestamps
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
@@ -788,10 +792,12 @@ model GeneratorJob {
   // Relations
   tasks        GeneratorTask[]
   tag          AccountTag?     @relation(fields: [tagId], references: [id], onDelete: SetNull)
+  run          GeneratorRun?   @relation(fields: [runId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([createdAt])
   @@index([tagId])
+  @@index([runId])
   @@map("generator_jobs")
 }
 
@@ -807,6 +813,15 @@ model GeneratorTask {
   // Status
   status       String    @default("PENDING") // PENDING, RUNNING, SUCCESS, FAILED
   errorMessage String?   @map("error_message")
+
+  // Progress tracking (NEW - for live updates)
+  workerName   String?   @map("worker_name")    // Which worker thread is processing
+  currentStep  String?   @map("current_step")   // "init", "signup", "verify_email", "verify_phone", "complete"
+  stepDetail   String?   @map("step_detail")    // Detailed status message
+  stepProgress Int?      @map("step_progress")  // 0-100 for current step
+  retryCount   Int       @default(0) @map("retry_count")
+  lastError    String?   @map("last_error")
+  durationMs   Int?      @map("duration_ms")    // Total execution time
 
   // Output (on success)
   password     String?
@@ -849,14 +864,16 @@ model GeneratorConfig {
 // ========================================
 
 model GeneratorEmail {
-  id        String    @id @default(cuid())
-  email     String    @unique
-  status    String    @default("AVAILABLE") // AVAILABLE, IN_USE, USED
-  usedAt    DateTime? @map("used_at")
-  createdAt DateTime  @default(now()) @map("created_at")
+  id           String    @id @default(cuid())
+  email        String    @unique
+  status       String    @default("AVAILABLE") // AVAILABLE, IN_USE, USED
+  imapProvider String?   @map("imap_provider")  // "aycd", "gmail", etc.
+  usedAt       DateTime? @map("used_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   @@index([status])
   @@index([createdAt])
+  @@index([imapProvider])
   @@map("generator_emails")
 }
 
@@ -882,6 +899,82 @@ model GeneratorBadProxy {
 
   @@index([detectedAt])
   @@map("generator_bad_proxies")
+}
+
+// ========================================
+// Generator Runs & Workers - Daemon Lifecycle Tracking
+// ========================================
+
+model GeneratorRun {
+  id                String    @id @default(cuid())
+  workerId          String    @map("worker_id") // Machine identifier (hostname)
+  status            String    @default("RUNNING") // RUNNING, COMPLETED, ABORTED
+  
+  startedAt         DateTime  @default(now()) @map("started_at")
+  endedAt           DateTime? @map("ended_at")
+  lastHeartbeat     DateTime  @default(now()) @map("last_heartbeat")
+  
+  activeWorkerCount Int       @default(1) @map("active_worker_count")
+  
+  // Stats
+  jobsSuccess       Int       @default(0) @map("jobs_success")
+  jobsFailed        Int       @default(0) @map("jobs_failed")
+  tasksSuccess      Int       @default(0) @map("tasks_success")
+  tasksFailed       Int       @default(0) @map("tasks_failed")
+  
+  notes             String?
+  
+  // Relations
+  jobs              GeneratorJob[]
+  workers           GeneratorWorker[]
+  
+  @@index([workerId])
+  @@index([status])
+  @@index([lastHeartbeat])
+  @@map("generator_runs")
+}
+
+model GeneratorWorker {
+  id              String    @id @default(cuid())
+  runId           String    @map("run_id")
+  workerName      String    @map("worker_name")   // e.g., "local-dev-1"
+  deviceName      String    @map("device_name")   // Parent daemon hostname
+  status          String    @default("IDLE")      // IDLE, PROCESSING, PAUSED, STOPPED
+  
+  currentTaskId   String?   @map("current_task_id")
+  currentEmail    String?   @map("current_email")
+  currentStep     String?   @map("current_step")  // e.g., "Verifying phone"
+  currentProgress Int?      @map("current_progress") // 0-100 percentage
+  
+  lastHeartbeat   DateTime  @default(now()) @map("last_heartbeat")
+  startedAt       DateTime  @default(now()) @map("started_at")
+  stoppedAt       DateTime? @map("stopped_at")
+  
+  tasksCompleted  Int       @default(0) @map("tasks_completed")
+  tasksFailed     Int       @default(0) @map("tasks_failed")
+  
+  run             GeneratorRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  @@index([runId])
+  @@index([status])
+  @@index([lastHeartbeat])
+  @@map("generator_workers")
+}
+
+// ========================================
+// IMAP Providers - Global IMAP Configuration
+// ========================================
+
+model ImapProvider {
+  id          String   @id @default(cuid())
+  name        String   @unique  // "aycd", "gmail", "outlook"
+  displayName String   @map("display_name") // "AYCD Inbox", "Gmail IMAP"
+  isEnabled   Boolean  @default(true) @map("is_enabled")
+  config      String   @db.Text  // JSON: { apiKey?, host?, port?, etc. }
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  @@map("imap_providers")
 }
 
 // ========================================
