@@ -103,6 +103,22 @@ model CardTag {
 }
 
 // ========================================
+// Queue Tags - For organizing/filtering checkout jobs
+// ========================================
+
+model QueueTag {
+  id        String   @id @default(cuid())
+  name      String   @unique // e.g., "BTS", "Taylor Swift", "Test Run"
+  color     String?  // Optional hex color for UI display
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  checkoutJobs CheckoutJob[]
+
+  @@map("queue_tags")
+}
+
+// ========================================
 // Core Tables
 // ========================================
 
@@ -926,6 +942,7 @@ model CheckoutJob {
   account       Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
   card          Card?     @relation(fields: [cardId], references: [id], onDelete: SetNull)
   run           CheckoutRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  tags          QueueTag[]    // Tags for organizing queue jobs
 
   @@index([status])
   @@index([accountId])
@@ -1026,6 +1043,9 @@ model ScrapeJob {
   
   // Output data (JSON) - populated when complete
   outputData  String?         @map("output_data") @db.Text // JSON: scraped result
+  
+  // Live progress tracking (JSON) - updated during scrape
+  progress    String?         @db.Text // JSON: { step, percent, message }
   
   // Error info
   errorCode   String?         @map("error_code")

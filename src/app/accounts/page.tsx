@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { Search, Download, ArrowUpDown, Pencil, X, ChevronDown, ChevronRight, Loader2, Upload, RefreshCw, Check, CloudUpload } from "lucide-react";
+import { Search, Download, ArrowUpDown, Pencil, X, ChevronDown, ChevronRight, Loader2, Upload, RefreshCw, Check, CloudUpload, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,7 @@ import { formatDate } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { PaginationControls } from "@/components/pagination-controls";
 import { AccountEditDialog } from "@/components/account-edit-dialog";
+import { TagList, TagFilter } from "@/components/tags";
 
 interface AccountTag {
   id: string;
@@ -154,9 +155,9 @@ export default function AccountsPage() {
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [syncingFromPos, setSyncingFromPos] = useState(false);
   
-  // Tag filter state
+  // Tag filter state - now supports multiple tags
   const [tags, setTags] = useState<AccountTag[]>([]);
-  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [generatedFilter, setGeneratedFilter] = useState<string>("all");
 
   const { toast } = useToast();
@@ -250,7 +251,7 @@ export default function AccountsPage() {
       if (cardFilter !== "all") params.set("hasCard", cardFilter);
       if (purchaseFilter !== "all") params.set("hasPurchases", purchaseFilter);
       if (posImportedFilter !== "all") params.set("posImported", posImportedFilter);
-      if (tagFilter !== "all") params.set("tagId", tagFilter);
+      if (tagFilter.length > 0) params.set("tagIds", tagFilter.join(","));
       if (generatedFilter !== "all") params.set("generated", generatedFilter);
 
       const response = await fetch(`/api/accounts?${params}`);
@@ -364,6 +365,49 @@ export default function AccountsPage() {
       title: "Export Successful",
       description: `Exported ${toExport.length} accounts`,
     });
+  };
+
+  // Bulk delete/deactivate accounts
+  const handleBulkDelete = async (permanent: boolean = false) => {
+    const accountIds = Array.from(selectedIds);
+    if (accountIds.length === 0) return;
+
+    const confirmMessage = permanent
+      ? `Are you sure you want to permanently delete ${accountIds.length} account(s)? This cannot be undone.`
+      : `Are you sure you want to deactivate ${accountIds.length} account(s)?`;
+
+    if (!window.confirm(confirmMessage)) return;
+
+    try {
+      const response = await fetch("/api/accounts", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountIds, permanent }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        toast({
+          title: permanent ? "Accounts Deleted" : "Accounts Deactivated",
+          description: data.message,
+        });
+        setSelectedIds(new Set());
+        fetchAccounts();
+      } else {
+        toast({
+          title: "Delete Failed",
+          description: data.error || "Failed to delete accounts",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete accounts",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleSearch = (e: React.FormEvent) => {
@@ -536,18 +580,27 @@ export default function AccountsPage() {
             Sync from POS
           </Button>
           {selectedIds.size > 0 && (
-            <Button 
-              variant="default"
-              onClick={handleBulkImportToPos}
-              disabled={importingIds.size > 0}
-            >
-              {importingIds.size > 0 ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <CloudUpload className="h-4 w-4 mr-2" />
-              )}
-              Import to POS ({selectedIds.size})
-            </Button>
+            <>
+              <Button 
+                variant="default"
+                onClick={handleBulkImportToPos}
+                disabled={importingIds.size > 0}
+              >
+                {importingIds.size > 0 ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <CloudUpload className="h-4 w-4 mr-2" />
+                )}
+                Import to POS ({selectedIds.size})
+              </Button>
+              <Button 
+                variant="destructive"
+                onClick={() => handleBulkDelete(false)}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Deactivate ({selectedIds.size})
+              </Button>
+            </>
           )}
           <Button variant="outline" onClick={() => setShowPasswords(!showPasswords)}>
             {showPasswords ? "Hide Passwords" : "Show Passwords"}
@@ -635,25 +688,12 @@ export default function AccountsPage() {
                 <SelectItem value="false">Not in POS</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={tagFilter} onValueChange={setTagFilter}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="Tag" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Tags</SelectItem>
-                {tags.map((tag) => (
-                  <SelectItem key={tag.id} value={tag.id}>
-                    <span className="flex items-center gap-2">
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: tag.color || "#6b7280" }}
-                      />
-                      {tag.name}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <TagFilter
+              type="account"
+              selectedTagIds={tagFilter}
+              onTagsChange={setTagFilter}
+              className="w-[180px]"
+            />
             <Select value={generatedFilter} onValueChange={setGeneratedFilter}>
               <SelectTrigger className="w-[150px]">
                 <SelectValue placeholder="Source" />
@@ -789,26 +829,7 @@ export default function AccountsPage() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            {account.tags && account.tags.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {account.tags.map((tag) => (
-                                  <Badge
-                                    key={tag.id}
-                                    variant="outline"
-                                    className="text-xs gap-1"
-                                    style={{ borderColor: tag.color || undefined }}
-                                  >
-                                    <span
-                                      className="w-2 h-2 rounded-full"
-                                      style={{ backgroundColor: tag.color || "#6b7280" }}
-                                    />
-                                    {tag.name}
-                                  </Badge>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">-</span>
-                            )}
+                            <TagList tags={account.tags || []} maxDisplay={3} />
                           </TableCell>
                           <TableCell>
                             {account.cards.length > 0 ? (

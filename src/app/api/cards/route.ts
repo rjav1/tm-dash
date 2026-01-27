@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
     const state = searchParams.get("state"); // 2-letter state code
     const hasPurchases = searchParams.get("hasPurchases"); // "true", "false"
     const expiry = searchParams.get("expiry"); // "expired", "expiring_soon", "valid"
-    const tagId = searchParams.get("tagId"); // Filter by card tag
+    const tagIds = searchParams.get("tagIds"); // Filter by card tags (comma-separated)
     const includeDeleted = searchParams.get("includeDeleted") === "true"; // Show soft-deleted cards
     const sortBy = searchParams.get("sortBy") || "createdAt";
     const sortOrder = searchParams.get("sortOrder") || "desc";
@@ -146,9 +146,19 @@ export async function GET(request: NextRequest) {
       where.purchases = { none: {} };
     }
 
-    // Filter by tag
-    if (tagId) {
-      where.tags = { some: { id: tagId } };
+    // Filter by tags (supports multiple tag IDs comma-separated)
+    if (tagIds) {
+      const tagIdArray = tagIds.split(",").filter(Boolean);
+      if (tagIdArray.length > 0) {
+        // Match cards that have ALL specified tags
+        const existingAnd = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+        where.AND = [
+          ...existingAnd,
+          ...tagIdArray.map((id) => ({
+            tags: { some: { id } },
+          })),
+        ];
+      }
     }
 
     // Search - include street and city

@@ -75,10 +75,20 @@ export async function GET(request: NextRequest) {
       where.posAccountId = null;
     }
 
-    // Filter by tag
-    const tagId = searchParams.get("tagId");
-    if (tagId) {
-      where.tags = { some: { id: tagId } };
+    // Filter by tags (supports multiple tag IDs comma-separated)
+    const tagIds = searchParams.get("tagIds");
+    if (tagIds) {
+      const tagIdArray = tagIds.split(",").filter(Boolean);
+      if (tagIdArray.length > 0) {
+        // Match accounts that have ALL specified tags
+        const existingAnd = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+        where.AND = [
+          ...existingAnd,
+          ...tagIdArray.map((id) => ({
+            tags: { some: { id } },
+          })),
+        ];
+      }
     }
 
     // Filter by generated status
@@ -247,6 +257,99 @@ export async function GET(request: NextRequest) {
     console.error("Accounts fetch error:", error);
     return NextResponse.json(
       { error: "Failed to fetch accounts" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/accounts
+ * Bulk delete accounts
+ * 
+ * Body:
+ * - accountIds: Array of account IDs to delete
+ * - permanent: Whether to permanently delete (default: false - soft delete by setting status to INACTIVE)
+ * 
+ * Note: Accounts with purchases or active listings cannot be permanently deleted.
+ */
+export async function DELETE(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { accountIds, permanent = false } = body as { accountIds: string[]; permanent?: boolean };
+
+    if (!accountIds || !Array.isArray(accountIds) || accountIds.length === 0) {
+      return NextResponse.json(
+        { error: "Account IDs are required" },
+        { status: 400 }
+      );
+    }
+
+    let deleted = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    if (permanent) {
+      // Permanent delete - only accounts without purchases/listings
+      for (const id of accountIds) {
+        try {
+          // Check if account has purchases or listings
+          const account = await prisma.account.findUnique({
+            where: { id },
+            include: {
+              _count: {
+                select: {
+                  purchases: true,
+                },
+              },
+            },
+          });
+
+          if (!account) {
+            skipped++;
+            continue;
+          }
+
+          if (account._count.purchases > 0) {
+            errors.push(`${account.email}: Has ${account._count.purchases} purchase(s)`);
+            skipped++;
+            continue;
+          }
+
+          // Delete related data first
+          await prisma.$transaction([
+            prisma.queuePosition.deleteMany({ where: { accountId: id } }),
+            prisma.card.updateMany({ where: { accountId: id }, data: { accountId: null } }),
+            prisma.account.delete({ where: { id } }),
+          ]);
+
+          deleted++;
+        } catch (e) {
+          console.error(`Failed to delete account ${id}:`, e);
+          skipped++;
+        }
+      }
+    } else {
+      // Soft delete - set status to INACTIVE
+      const result = await prisma.account.updateMany({
+        where: { id: { in: accountIds } },
+        data: { status: "INACTIVE" },
+      });
+      deleted = result.count;
+    }
+
+    return NextResponse.json({
+      success: true,
+      deleted,
+      skipped,
+      errors: errors.length > 0 ? errors : undefined,
+      message: permanent
+        ? `Permanently deleted ${deleted} account(s)${skipped > 0 ? `, ${skipped} skipped` : ""}`
+        : `Deactivated ${deleted} account(s)`,
+    });
+  } catch (error) {
+    console.error("Account delete error:", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to delete accounts" },
       { status: 500 }
     );
   }

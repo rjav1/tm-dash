@@ -75,6 +75,7 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
   // Sync status
   const [syncStatus, setSyncStatus] = useState<"idle" | "success" | "error">("idle");
   const [syncMessage, setSyncMessage] = useState("");
+  const [syncProgress, setSyncProgress] = useState<{ percent: number; message: string } | null>(null);
   const [vividSeatsPrice, setVividSeatsPrice] = useState<number | null>(null);
   const [vividSeatsUrl, setVividSeatsUrl] = useState<string | null>(null);
   
@@ -96,6 +97,7 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
       setGetInPriceUrl(event.getInPriceUrl || "");
       setSyncStatus("idle");
       setSyncMessage("");
+      setSyncProgress(null);
       setVividSeatsPrice(null);
       setVividSeatsUrl(null);
       setZoneSectionsData(null);
@@ -186,9 +188,11 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
     setSyncing(true);
     setSyncStatus("idle");
     setSyncMessage("");
+    setSyncProgress({ percent: 0, message: "Starting..." });
 
     try {
-      const response = await fetch("/api/events/lookup", {
+      // Use streaming endpoint for live progress
+      const response = await fetch("/api/events/lookup-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -200,92 +204,90 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
         }),
       });
 
-      const data = await response.json();
-
-      // Extract Vivid Seats price if available
-      if (data.vividSeats?.getInPrice) {
-        setVividSeatsPrice(data.vividSeats.getInPrice);
-        setVividSeatsUrl(data.vividSeats.url);
+      if (!response.body) {
+        throw new Error("No response stream");
       }
 
-      if (data.success && (data.ticketmaster || data.scraped)) {
-        // Prefer scraped data if available (from TM page)
-        if (data.scraped && data.scraped.eventName) {
-          const sc = data.scraped;
-          
-          if (sc.artistName) {
-            setArtistName(sc.artistName);
-          }
-          if (sc.eventName) {
-            setEventName(sc.eventName);
-          }
-          if (sc.venue) {
-            const venueParts = [sc.venue];
-            if (sc.venueCity) venueParts.push(sc.venueCity);
-            if (sc.venueState) venueParts.push(sc.venueState);
-            setVenue(venueParts.join(", "));
-          }
-          if (sc.date) {
-            let dateStr = sc.date;
-            if (sc.time) {
-              dateStr += ` at ${sc.time}`;
-            }
-            setEventDateRaw(dateStr);
-          }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
-          setSyncStatus("success");
-          // Show appropriate message based on data source
-          let msg = data.source === "database" 
-            ? "Event information loaded from database!"
-            : "Event information synced from Ticketmaster!";
-          if (data.vividSeats?.getInPrice) {
-            msg += ` Get-in price: $${data.vividSeats.getInPrice}`;
-          }
-          setSyncMessage(msg);
-        } else if (data.ticketmaster) {
-          const tm = data.ticketmaster;
-          
-          // Update fields with synced data
-          if (tm.name) {
-            setEventName(tm.name);
-          }
-          if (tm.venue?.name) {
-            const venueStr = tm.venue.city && tm.venue.state
-              ? `${tm.venue.name}, ${tm.venue.city}, ${tm.venue.state}`
-              : tm.venue.name;
-            setVenue(venueStr);
-          }
-          if (tm.date) {
-            const dateObj = new Date(tm.date + "T12:00:00");
-            
-            const formatted = dateObj.toLocaleDateString("en-US", {
-              month: "long",
-              day: "numeric",
-              year: "numeric",
-            });
-            if (tm.time) {
-              const timeFormatted = new Date(`2000-01-01T${tm.time}`).toLocaleTimeString("en-US", {
-                hour: "numeric",
-                minute: "2-digit",
-              });
-              setEventDateRaw(`${formatted} at ${timeFormatted}`);
-            } else {
-              setEventDateRaw(formatted);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n").filter((line) => line.trim());
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const event = JSON.parse(line.slice(6));
+
+              if (event.type === "progress") {
+                setSyncProgress({
+                  percent: event.percent || 0,
+                  message: event.message || "Processing...",
+                });
+              } else if (event.type === "complete") {
+                const data = event.data;
+                
+                // Extract Vivid Seats price if available
+                if (data.vividSeats?.getInPrice) {
+                  setVividSeatsPrice(data.vividSeats.getInPrice);
+                  setVividSeatsUrl(data.vividSeats.url);
+                }
+
+                if (data.success && data.scraped) {
+                  const sc = data.scraped;
+                  
+                  if (sc.artistName) {
+                    setArtistName(sc.artistName);
+                  }
+                  if (sc.eventName) {
+                    setEventName(sc.eventName);
+                  }
+                  if (sc.venue) {
+                    const venueParts = [sc.venue];
+                    if (sc.venueCity) venueParts.push(sc.venueCity);
+                    if (sc.venueState) venueParts.push(sc.venueState);
+                    setVenue(venueParts.join(", "));
+                  }
+                  if (sc.date) {
+                    let dateStr = sc.date;
+                    if (sc.time) {
+                      dateStr += ` at ${sc.time}`;
+                    }
+                    setEventDateRaw(dateStr);
+                  }
+
+                  setSyncStatus("success");
+                  let msg = data.source === "database" 
+                    ? "Event information loaded from database!"
+                    : "Event information synced from Ticketmaster!";
+                  if (data.vividSeats?.getInPrice) {
+                    msg += ` Get-in price: $${data.vividSeats.getInPrice}`;
+                  }
+                  setSyncMessage(msg);
+                } else {
+                  setSyncStatus("error");
+                  setSyncMessage("Could not find matching event");
+                }
+              } else if (event.type === "error") {
+                setSyncStatus("error");
+                setSyncMessage(event.error || "Sync failed");
+              }
+            } catch {
+              // Ignore parse errors
             }
           }
-
-          setSyncStatus("success");
-          setSyncMessage("Event information synced from Ticketmaster API!");
         }
-      } else {
-        setSyncStatus("error");
-        setSyncMessage(data.error || "Could not find matching event");
       }
     } catch (error) {
       setSyncStatus("error");
       setSyncMessage(error instanceof Error ? error.message : "Sync failed");
     } finally {
       setSyncing(false);
+      setSyncProgress(null);
     }
   };
 
@@ -431,8 +433,24 @@ export function EditEventDialog({ event, onUpdate }: EditEventDialogProps) {
                 </p>
               </div>
 
+              {/* Live Progress Bar */}
+              {syncing && syncProgress && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{syncProgress.message}</span>
+                    <span className="font-mono text-xs">{syncProgress.percent}%</span>
+                  </div>
+                  <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary transition-all duration-300 ease-out"
+                      style={{ width: `${syncProgress.percent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Sync Status Alert */}
-              {syncStatus !== "idle" && (
+              {syncStatus !== "idle" && !syncing && (
                 <Alert variant={syncStatus === "success" ? "default" : "destructive"}>
                   {syncStatus === "success" ? (
                     <CheckCircle2 className="h-4 w-4" />
