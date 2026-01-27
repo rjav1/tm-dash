@@ -1106,8 +1106,11 @@ export default function GeneratorPage() {
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={() => workerCount > 1 && handleControl("scale_workers", { workerCount: workerCount - 1 })}
-                      disabled={workerCount <= 1}
+                      onClick={() => {
+                        const newCount = workerCount - 1;
+                        if (newCount >= 1) handleControl("scale_workers", { workerCount: newCount });
+                      }}
+                      disabled={workerCount <= 1 || isControlLoading === "scale_workers"}
                     >
                       <MinusCircle className="h-4 w-4" />
                     </Button>
@@ -1115,8 +1118,11 @@ export default function GeneratorPage() {
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={() => workerCount < 10 && handleControl("scale_workers", { workerCount: workerCount + 1 })}
-                      disabled={workerCount >= 10}
+                      onClick={() => {
+                        const newCount = workerCount + 1;
+                        if (newCount <= 10) handleControl("scale_workers", { workerCount: newCount });
+                      }}
+                      disabled={workerCount >= 10 || isControlLoading === "scale_workers"}
                     >
                       <PlusCircle className="h-4 w-4" />
                     </Button>
