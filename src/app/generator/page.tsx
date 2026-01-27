@@ -503,8 +503,16 @@ export default function GeneratorPage() {
     refreshAll();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Realtime subscription + fallback polling
+  // Always use polling for reliability (3s interval)
+  // Realtime is kept as an enhancement but we don't depend on it
   useEffect(() => {
+    // Always start polling immediately - this is more reliable than Realtime
+    pollIntervalRef.current = setInterval(() => {
+      fetchStats();
+      fetchJobs();
+    }, 3000);
+    
+    // Try to set up Realtime as an enhancement (triggers immediate updates)
     const supabaseClient = getSupabase();
     
     if (isSupabaseConfigured() && supabaseClient) {
@@ -528,42 +536,22 @@ export default function GeneratorPage() {
         .subscribe((status) => {
           const connected = status === "SUBSCRIBED";
           setRealtimeConnected(connected);
-          
-          // If not connected, start fallback polling
-          if (!connected && !pollIntervalRef.current) {
-            pollIntervalRef.current = setInterval(() => {
-              fetchStats();
-              fetchJobs();
-            }, 5000);
-          } else if (connected && pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
         });
 
       channelRef.current = channel;
-      
-      return () => {
-        if (channelRef.current && supabaseClient) {
+    }
+    
+    return () => {
+      if (channelRef.current) {
+        const supabaseClient = getSupabase();
+        if (supabaseClient) {
           supabaseClient.removeChannel(channelRef.current);
         }
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-        }
-      };
-    } else {
-      // No Supabase configured, use polling
-      pollIntervalRef.current = setInterval(() => {
-        fetchStats();
-        fetchJobs();
-      }, 5000);
-      
-      return () => {
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-        }
-      };
-    }
+      }
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
   }, [expandedJobId, fetchJobs, fetchStats]);
 
   // Control handlers
