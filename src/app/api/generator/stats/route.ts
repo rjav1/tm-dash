@@ -76,6 +76,26 @@ export async function GET(request: NextRequest) {
       totalJobs += item._count.id;
     }
 
+    // Auto-cleanup: Release orphaned emails (IN_USE but no matching pending/running task)
+    // This handles edge cases where emails got stuck due to crashes or bugs
+    const orphanedEmails = await prisma.$queryRaw<{ email: string }[]>`
+      SELECT e.email 
+      FROM generator_emails e
+      LEFT JOIN generator_tasks t ON LOWER(t.email) = LOWER(e.email) AND t.status IN ('PENDING', 'RUNNING')
+      WHERE e.status = 'IN_USE' AND t.id IS NULL
+    `;
+    
+    if (orphanedEmails.length > 0) {
+      await prisma.generatorEmail.updateMany({
+        where: { 
+          email: { in: orphanedEmails.map(e => e.email.toLowerCase()) },
+          status: "IN_USE",
+        },
+        data: { status: "AVAILABLE" },
+      });
+      console.log(`[Stats] Auto-released ${orphanedEmails.length} orphaned email(s)`);
+    }
+
     // Pool stats
     const emailsAvailable = await prisma.generatorEmail.count({
       where: { status: "AVAILABLE" },
@@ -136,9 +156,25 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Auto-cleanup: Mark stale workers as STOPPED (no heartbeat in 60s)
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
+    await prisma.generatorWorker.updateMany({
+      where: {
+        status: { not: "STOPPED" },
+        lastHeartbeat: { lt: oneMinuteAgo },
+      },
+      data: {
+        status: "STOPPED",
+        stoppedAt: new Date(),
+        currentTaskId: null,
+        currentEmail: null,
+        currentStep: null,
+        currentProgress: null,
+      },
+    });
+
     // Get individual workers from generator_workers table
     // Only get workers that are not STOPPED and have heartbeat within last 60 seconds
-    const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
     const individualWorkers = await prisma.generatorWorker.findMany({
       where: {
         status: { not: "STOPPED" },

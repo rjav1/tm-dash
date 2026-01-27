@@ -574,8 +574,14 @@ export default function GeneratorPage() {
       }
       
       toast({ title: data.message || "Action completed" });
-      fetchStats();
-      fetchJobs();
+      
+      // Actions that affect email pool need to refresh emails too
+      const emailAffectingActions = ["stop", "skip", "clear", "cancel_job", "cancel_task", "release_orphaned_emails", "clear_all_data"];
+      if (emailAffectingActions.includes(action)) {
+        await Promise.all([fetchStats(), fetchJobs(), fetchEmails()]);
+      } else {
+        await Promise.all([fetchStats(), fetchJobs()]);
+      }
     } catch (error) {
       toast({ title: "Error", description: error instanceof Error ? error.message : "Failed", variant: "destructive" });
     } finally {
@@ -721,10 +727,17 @@ export default function GeneratorPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
       toast({ title: "Job Created", description: data.message });
-      fetchJobs();
-      fetchEmails();
-      fetchProxies();
-      fetchStats();
+      
+      // Refresh all data and wait for it to complete
+      await Promise.all([
+        fetchJobs(),
+        fetchEmails(),
+        fetchProxies(),
+        fetchStats(),
+      ]);
+      
+      // Reset form
+      setEmailCount("10");
       setActiveTab("monitor");
     } catch (error) {
       toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to create job", variant: "destructive" });
@@ -738,8 +751,8 @@ export default function GeneratorPage() {
       const response = await fetch(`/api/generator/jobs/${jobId}/cancel`, { method: "POST" });
       if (!response.ok) throw new Error((await response.json()).error);
       toast({ title: "Job Cancelled" });
-      fetchJobs();
-      fetchStats();
+      // Refresh all data including emails (cancelling releases emails back to pool)
+      await Promise.all([fetchJobs(), fetchEmails(), fetchStats()]);
     } catch (error) {
       toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to cancel", variant: "destructive" });
     }
@@ -1035,7 +1048,7 @@ export default function GeneratorPage() {
               <CardContent className="space-y-4">
                 {/* Start/Stop Run */}
                 <div className="flex gap-2">
-                  {stats?.workers.active ? (
+                  {(stats?.workers.active ?? 0) > 0 || (stats?.workers.totalThreads ?? 0) > 0 ? (
                     <Button 
                       variant="destructive" 
                       className="flex-1"
@@ -1057,13 +1070,17 @@ export default function GeneratorPage() {
                   )}
                 </div>
 
-                {/* Pause/Resume */}
+                {/* Pause/Resume - only enabled when workers are active */}
                 <div className="flex gap-2">
                   <Button 
                     variant={isPaused ? "default" : "secondary"}
                     className="flex-1"
                     onClick={() => handleControl(isPaused ? "resume" : "pause")}
-                    disabled={isControlLoading === "pause" || isControlLoading === "resume"}
+                    disabled={
+                      isControlLoading === "pause" || 
+                      isControlLoading === "resume" ||
+                      ((stats?.workers.totalThreads ?? 0) === 0 && !isPaused)
+                    }
                   >
                     {isPaused ? (
                       <>
@@ -1080,7 +1097,7 @@ export default function GeneratorPage() {
                   <Button 
                     variant="outline"
                     onClick={() => handleControl("skip")}
-                    disabled={isControlLoading === "skip"}
+                    disabled={isControlLoading === "skip" || (stats?.tasks.running ?? 0) === 0}
                   >
                     <SkipForward className="mr-2 h-4 w-4" />
                     Skip
@@ -1123,7 +1140,7 @@ export default function GeneratorPage() {
                     variant="outline" 
                     size="sm"
                     onClick={() => handleControl("retry_all")}
-                    disabled={isControlLoading === "retry_all"}
+                    disabled={isControlLoading === "retry_all" || (stats?.tasks.failed ?? 0) === 0}
                   >
                     <RotateCcw className="mr-2 h-4 w-4" />
                     Retry Failed
@@ -1132,11 +1149,36 @@ export default function GeneratorPage() {
                     variant="outline" 
                     size="sm"
                     onClick={() => handleControl("clear")}
-                    disabled={isControlLoading === "clear"}
+                    disabled={isControlLoading === "clear" || (stats?.jobs.pending ?? 0) === 0}
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
                     Clear Queue
                   </Button>
+                </div>
+
+                {/* Maintenance Actions */}
+                <div className="pt-2 border-t">
+                  <Label className="text-xs text-muted-foreground">Maintenance</Label>
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <Button 
+                      variant="ghost" 
+                      size="sm"
+                      onClick={() => handleControl("reset_counters")}
+                      disabled={isControlLoading === "reset_counters"}
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Reset Counters
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm"
+                      onClick={() => handleControl("release_orphaned_emails")}
+                      disabled={isControlLoading === "release_orphaned_emails"}
+                    >
+                      <Mail className="mr-2 h-4 w-4" />
+                      Fix Emails
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1229,8 +1271,22 @@ export default function GeneratorPage() {
                     {jobs.filter(j => j.status === "RUNNING" || j.status === "PENDING").slice(0, 10).map((job) => (
                       <TableRow key={job.id}>
                         <TableCell>
-                          <div className="font-medium">{job.totalTasks} tasks</div>
-                          <div className="text-xs text-muted-foreground">{job.id.slice(0, 8)}...</div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{job.totalTasks} accounts</span>
+                            <Badge variant="outline" className="text-xs">{job.imapProvider}</Badge>
+                            {job.tag && (
+                              <Badge 
+                                variant="outline"
+                                className="text-xs"
+                                style={{ 
+                                  backgroundColor: `${job.tag.color}20`,
+                                  borderColor: job.tag.color || undefined,
+                                }}
+                              >
+                                {job.tag.name}
+                              </Badge>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>{getStatusBadge(job.status)}</TableCell>
                         <TableCell>
@@ -1244,7 +1300,8 @@ export default function GeneratorPage() {
                             </span>
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {job.succeeded} success, {job.failed} failed
+                            <span className="text-green-600">{job.succeeded} success</span>
+                            {job.failed > 0 && <span className="text-red-500 ml-2">{job.failed} failed</span>}
                           </div>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
@@ -1678,7 +1735,7 @@ export default function GeneratorPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          {job.tag && (
+                          {job.tag ? (
                             <Badge 
                               variant="outline"
                               style={{ 
@@ -1688,6 +1745,8 @@ export default function GeneratorPage() {
                             >
                               {job.tag.name}
                             </Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">-</span>
                           )}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
@@ -1723,79 +1782,225 @@ export default function GeneratorPage() {
                                 <Loader2 className="h-6 w-6 animate-spin" />
                               </div>
                             ) : (
-                              <div className="space-y-4">
-                                {/* Task Actions */}
-                                {(successfulTasks.length > 0 || failedTasks.length > 0) && (
-                                  <div className="flex gap-2">
-                                    {successfulTasks.length > 0 && (
-                                      <Button
-                                        size="sm"
-                                        onClick={() => handleImportTasks(job.id, undefined, true)}
-                                        disabled={importing}
-                                      >
-                                        {importing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                                        Import All ({successfulTasks.length})
-                                      </Button>
-                                    )}
-                                    {failedTasks.length > 0 && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => handleRetryTasks(job.id, undefined, true)}
-                                        disabled={retrying}
-                                      >
-                                        {retrying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
-                                        Retry Failed ({failedTasks.length})
-                                      </Button>
-                                    )}
+                              <div className="space-y-6">
+                                {/* Successful Tasks Section */}
+                                {successfulTasks.length > 0 && (
+                                  <div className="border rounded-lg p-4 bg-green-50/50">
+                                    <div className="flex items-center justify-between mb-3">
+                                      <div className="flex items-center gap-2">
+                                        <CheckCircle2 className="h-5 w-5 text-green-600" />
+                                        <span className="font-medium text-green-800">
+                                          Successful Tasks ({successfulTasks.length})
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <Checkbox
+                                          id="select-all-success"
+                                          checked={successfulTasks.every(t => selectedTaskIds.has(t.id))}
+                                          onCheckedChange={(checked) => {
+                                            const newSelected = new Set(selectedTaskIds);
+                                            successfulTasks.forEach(t => {
+                                              if (checked) newSelected.add(t.id);
+                                              else newSelected.delete(t.id);
+                                            });
+                                            setSelectedTaskIds(newSelected);
+                                          }}
+                                        />
+                                        <Label htmlFor="select-all-success" className="text-sm">Select All</Label>
+                                        <Button
+                                          size="sm"
+                                          onClick={() => {
+                                            const selected = successfulTasks.filter(t => selectedTaskIds.has(t.id));
+                                            if (selected.length > 0) {
+                                              handleImportTasks(job.id, selected.map(t => t.id));
+                                            } else {
+                                              handleImportTasks(job.id, undefined, true);
+                                            }
+                                          }}
+                                          disabled={importing}
+                                        >
+                                          {importing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                                          Import {successfulTasks.filter(t => selectedTaskIds.has(t.id)).length > 0 
+                                            ? `Selected (${successfulTasks.filter(t => selectedTaskIds.has(t.id)).length})`
+                                            : `All (${successfulTasks.length})`}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                    <Table>
+                                      <TableHeader>
+                                        <TableRow>
+                                          <TableHead className="w-8"></TableHead>
+                                          <TableHead>Email</TableHead>
+                                          <TableHead>Password</TableHead>
+                                          <TableHead>Duration</TableHead>
+                                          <TableHead>Status</TableHead>
+                                        </TableRow>
+                                      </TableHeader>
+                                      <TableBody>
+                                        {successfulTasks.map((task) => (
+                                          <TableRow key={task.id}>
+                                            <TableCell>
+                                              <Checkbox
+                                                checked={selectedTaskIds.has(task.id)}
+                                                onCheckedChange={(checked) => {
+                                                  const newSelected = new Set(selectedTaskIds);
+                                                  if (checked) newSelected.add(task.id);
+                                                  else newSelected.delete(task.id);
+                                                  setSelectedTaskIds(newSelected);
+                                                }}
+                                              />
+                                            </TableCell>
+                                            <TableCell className="font-mono text-sm">{task.email}</TableCell>
+                                            <TableCell>
+                                              <code className="text-xs bg-muted px-1 py-0.5 rounded">{task.password || "-"}</code>
+                                            </TableCell>
+                                            <TableCell className="text-sm text-muted-foreground">
+                                              {formatDuration(task.durationMs)}
+                                            </TableCell>
+                                            <TableCell>
+                                              {task.imported ? (
+                                                <Badge variant="outline" className="bg-blue-50 text-blue-700">Imported</Badge>
+                                              ) : (
+                                                <Badge variant="outline" className="bg-green-50 text-green-700">Ready</Badge>
+                                              )}
+                                            </TableCell>
+                                          </TableRow>
+                                        ))}
+                                      </TableBody>
+                                    </Table>
                                   </div>
                                 )}
-                                
-                                {/* Tasks Table */}
-                                <Table>
-                                  <TableHeader>
-                                    <TableRow>
-                                      <TableHead>Email</TableHead>
-                                      <TableHead>Status</TableHead>
-                                      <TableHead>Step</TableHead>
-                                      <TableHead>Password</TableHead>
-                                      <TableHead>Duration</TableHead>
-                                    </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                    {expandedJobTasks.map((task) => (
-                                      <TableRow key={task.id}>
-                                        <TableCell className="font-mono text-sm">{task.email}</TableCell>
-                                        <TableCell>
-                                          <div className="flex items-center gap-2">
-                                            {getStatusBadge(task.status)}
-                                            {task.imported && <Badge variant="outline">Imported</Badge>}
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>
-                                          {task.status === "RUNNING" ? (
-                                            <div className="flex items-center gap-2">
-                                              <Progress value={task.stepProgress || 0} className="w-16" />
-                                              <span className="text-xs text-muted-foreground">{task.currentStep}</span>
-                                            </div>
-                                          ) : task.status === "FAILED" ? (
-                                            <span className="text-xs text-red-500">{task.errorMessage?.slice(0, 50)}</span>
-                                          ) : (
-                                            <span className="text-xs text-muted-foreground">{task.currentStep || "-"}</span>
-                                          )}
-                                        </TableCell>
-                                        <TableCell>
-                                          {task.password ? (
-                                            <code className="text-xs bg-muted px-1 py-0.5 rounded">{task.password}</code>
-                                          ) : "-"}
-                                        </TableCell>
-                                        <TableCell className="text-sm text-muted-foreground">
-                                          {formatDuration(task.durationMs)}
-                                        </TableCell>
-                                      </TableRow>
-                                    ))}
-                                  </TableBody>
-                                </Table>
+
+                                {/* Failed Tasks Section */}
+                                {failedTasks.length > 0 && (
+                                  <div className="border rounded-lg p-4 bg-red-50/50">
+                                    <div className="flex items-center justify-between mb-3">
+                                      <div className="flex items-center gap-2">
+                                        <XCircle className="h-5 w-5 text-red-600" />
+                                        <span className="font-medium text-red-800">
+                                          Failed Tasks ({failedTasks.length})
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <Checkbox
+                                          id="select-all-failed"
+                                          checked={failedTasks.every(t => selectedTaskIds.has(t.id))}
+                                          onCheckedChange={(checked) => {
+                                            const newSelected = new Set(selectedTaskIds);
+                                            failedTasks.forEach(t => {
+                                              if (checked) newSelected.add(t.id);
+                                              else newSelected.delete(t.id);
+                                            });
+                                            setSelectedTaskIds(newSelected);
+                                          }}
+                                        />
+                                        <Label htmlFor="select-all-failed" className="text-sm">Select All</Label>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => {
+                                            const selected = failedTasks.filter(t => selectedTaskIds.has(t.id));
+                                            if (selected.length > 0) {
+                                              handleRetryTasks(job.id, selected.map(t => t.id));
+                                            } else {
+                                              handleRetryTasks(job.id, undefined, true);
+                                            }
+                                          }}
+                                          disabled={retrying}
+                                        >
+                                          {retrying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+                                          Retry {failedTasks.filter(t => selectedTaskIds.has(t.id)).length > 0 
+                                            ? `Selected (${failedTasks.filter(t => selectedTaskIds.has(t.id)).length})`
+                                            : `All (${failedTasks.length})`}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                    <Table>
+                                      <TableHeader>
+                                        <TableRow>
+                                          <TableHead className="w-8"></TableHead>
+                                          <TableHead>Email</TableHead>
+                                          <TableHead>Error</TableHead>
+                                          <TableHead>Duration</TableHead>
+                                          <TableHead>Retries</TableHead>
+                                        </TableRow>
+                                      </TableHeader>
+                                      <TableBody>
+                                        {failedTasks.map((task) => (
+                                          <TableRow key={task.id}>
+                                            <TableCell>
+                                              <Checkbox
+                                                checked={selectedTaskIds.has(task.id)}
+                                                onCheckedChange={(checked) => {
+                                                  const newSelected = new Set(selectedTaskIds);
+                                                  if (checked) newSelected.add(task.id);
+                                                  else newSelected.delete(task.id);
+                                                  setSelectedTaskIds(newSelected);
+                                                }}
+                                              />
+                                            </TableCell>
+                                            <TableCell className="font-mono text-sm">{task.email}</TableCell>
+                                            <TableCell className="text-sm text-red-600 max-w-xs truncate">
+                                              {task.errorMessage || task.lastError || "Unknown error"}
+                                            </TableCell>
+                                            <TableCell className="text-sm text-muted-foreground">
+                                              {formatDuration(task.durationMs)}
+                                            </TableCell>
+                                            <TableCell>
+                                              <Badge variant="outline">{task.retryCount}</Badge>
+                                            </TableCell>
+                                          </TableRow>
+                                        ))}
+                                      </TableBody>
+                                    </Table>
+                                  </div>
+                                )}
+
+                                {/* Pending/Running Tasks Section */}
+                                {expandedJobTasks.filter(t => t.status === "PENDING" || t.status === "RUNNING").length > 0 && (
+                                  <div className="border rounded-lg p-4">
+                                    <div className="flex items-center gap-2 mb-3">
+                                      <Loader2 className="h-5 w-5 text-yellow-600" />
+                                      <span className="font-medium">
+                                        In Progress ({expandedJobTasks.filter(t => t.status === "PENDING" || t.status === "RUNNING").length})
+                                      </span>
+                                    </div>
+                                    <Table>
+                                      <TableHeader>
+                                        <TableRow>
+                                          <TableHead>Email</TableHead>
+                                          <TableHead>Status</TableHead>
+                                          <TableHead>Progress</TableHead>
+                                        </TableRow>
+                                      </TableHeader>
+                                      <TableBody>
+                                        {expandedJobTasks.filter(t => t.status === "PENDING" || t.status === "RUNNING").map((task) => (
+                                          <TableRow key={task.id}>
+                                            <TableCell className="font-mono text-sm">{task.email}</TableCell>
+                                            <TableCell>{getStatusBadge(task.status)}</TableCell>
+                                            <TableCell>
+                                              {task.status === "RUNNING" ? (
+                                                <div className="flex items-center gap-2">
+                                                  <Progress value={task.stepProgress || 0} className="w-24" />
+                                                  <span className="text-xs text-muted-foreground">{task.currentStep}</span>
+                                                </div>
+                                              ) : (
+                                                <span className="text-xs text-muted-foreground">Waiting...</span>
+                                              )}
+                                            </TableCell>
+                                          </TableRow>
+                                        ))}
+                                      </TableBody>
+                                    </Table>
+                                  </div>
+                                )}
+
+                                {/* Empty state */}
+                                {expandedJobTasks.length === 0 && (
+                                  <div className="text-center py-8 text-muted-foreground">
+                                    <p>No tasks in this job</p>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </TableCell>

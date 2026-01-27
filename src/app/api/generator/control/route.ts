@@ -92,7 +92,13 @@ export async function POST(request: NextRequest) {
           },
         });
         
-        // 4. Cancel any running tasks (they'll need to be retried)
+        // 4. Get running tasks to release their emails back to pool
+        const runningTasksToCancel = await prisma.generatorTask.findMany({
+          where: { status: "RUNNING" },
+          select: { email: true },
+        });
+        
+        // 5. Cancel any running tasks (they'll need to be retried)
         const tasksCancelled = await prisma.generatorTask.updateMany({
           where: { status: "RUNNING" },
           data: {
@@ -103,12 +109,24 @@ export async function POST(request: NextRequest) {
           },
         });
         
+        // 6. Release emails from cancelled tasks back to AVAILABLE
+        if (runningTasksToCancel.length > 0) {
+          await prisma.generatorEmail.updateMany({
+            where: { 
+              email: { in: runningTasksToCancel.map(t => t.email.toLowerCase()) },
+              status: "IN_USE",
+            },
+            data: { status: "AVAILABLE" },
+          });
+        }
+        
         return NextResponse.json({
           success: true,
           message: `Run stopped: ${runsAborted.count} run(s), ${workersUpdated.count} worker(s), ${tasksCancelled.count} task(s) cancelled`,
           runsAborted: runsAborted.count,
           workersUpdated: workersUpdated.count,
           tasksCancelled: tasksCancelled.count,
+          emailsReleased: runningTasksToCancel.length,
         });
       }
 
@@ -155,6 +173,12 @@ export async function POST(request: NextRequest) {
       }
 
       case "skip": {
+        // Get running tasks to release their emails back to pool
+        const runningTasksToSkip = await prisma.generatorTask.findMany({
+          where: { status: "RUNNING" },
+          select: { email: true },
+        });
+        
         // Cancel all RUNNING tasks
         const skipResult = await prisma.generatorTask.updateMany({
           where: { status: "RUNNING" },
@@ -178,14 +202,46 @@ export async function POST(request: NextRequest) {
           },
         });
         
+        // Release emails from skipped tasks back to AVAILABLE
+        if (runningTasksToSkip.length > 0) {
+          await prisma.generatorEmail.updateMany({
+            where: { 
+              email: { in: runningTasksToSkip.map(t => t.email.toLowerCase()) },
+              status: "IN_USE",
+            },
+            data: { status: "AVAILABLE" },
+          });
+        }
+        
         return NextResponse.json({
           success: true,
           message: `Skipped ${skipResult.count} running task(s)`,
           count: skipResult.count,
+          emailsReleased: runningTasksToSkip.length,
         });
       }
 
       case "clear": {
+        // First, get all emails from pending tasks to release them
+        const pendingTasks = await prisma.generatorTask.findMany({
+          where: {
+            job: { status: "PENDING" },
+            status: "PENDING",
+          },
+          select: { email: true },
+        });
+        
+        // Release emails back to AVAILABLE before deleting
+        if (pendingTasks.length > 0) {
+          await prisma.generatorEmail.updateMany({
+            where: { 
+              email: { in: pendingTasks.map(t => t.email.toLowerCase()) },
+              status: "IN_USE",
+            },
+            data: { status: "AVAILABLE" },
+          });
+        }
+        
         // Delete all PENDING jobs (cascade deletes tasks)
         const clearResult = await prisma.generatorJob.deleteMany({
           where: {
@@ -194,8 +250,9 @@ export async function POST(request: NextRequest) {
         });
         return NextResponse.json({
           success: true,
-          message: `Cleared ${clearResult.count} pending job(s)`,
+          message: `Cleared ${clearResult.count} pending job(s), released ${pendingTasks.length} email(s)`,
           count: clearResult.count,
+          emailsReleased: pendingTasks.length,
         });
       }
 
@@ -251,6 +308,15 @@ export async function POST(request: NextRequest) {
           );
         }
         
+        // Get all pending/running tasks to release their emails
+        const tasksToCancel = await prisma.generatorTask.findMany({
+          where: { 
+            jobId,
+            status: { in: ["PENDING", "RUNNING"] },
+          },
+          select: { email: true },
+        });
+        
         // Cancel the job
         await prisma.generatorJob.update({
           where: { id: jobId },
@@ -260,7 +326,7 @@ export async function POST(request: NextRequest) {
           },
         });
         
-        // Also cancel all pending/running tasks in this job
+        // Cancel all pending/running tasks in this job
         await prisma.generatorTask.updateMany({
           where: { 
             jobId,
@@ -274,10 +340,22 @@ export async function POST(request: NextRequest) {
           },
         });
         
+        // Release emails back to AVAILABLE
+        if (tasksToCancel.length > 0) {
+          await prisma.generatorEmail.updateMany({
+            where: { 
+              email: { in: tasksToCancel.map(t => t.email.toLowerCase()) },
+              status: "IN_USE",
+            },
+            data: { status: "AVAILABLE" },
+          });
+        }
+        
         return NextResponse.json({
           success: true,
-          message: "Job cancelled",
+          message: `Job cancelled, released ${tasksToCancel.length} email(s)`,
           jobId,
+          emailsReleased: tasksToCancel.length,
         });
       }
 
@@ -317,9 +395,20 @@ export async function POST(request: NextRequest) {
           },
         });
         
+        // Release email back to AVAILABLE if task was pending/running
+        if (task.status === "PENDING" || task.status === "RUNNING") {
+          await prisma.generatorEmail.updateMany({
+            where: { 
+              email: task.email.toLowerCase(),
+              status: "IN_USE",
+            },
+            data: { status: "AVAILABLE" },
+          });
+        }
+        
         return NextResponse.json({
           success: true,
-          message: "Task cancelled",
+          message: "Task cancelled, email released",
           taskId,
         });
       }
@@ -394,22 +483,71 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      case "clear_all_data": {
-        // Delete all generator jobs, tasks, runs, and workers (for clearing test data)
-        const [tasksDeleted, jobsDeleted, workersDeleted, runsDeleted] = await Promise.all([
-          prisma.generatorTask.deleteMany({}),
-          prisma.generatorJob.deleteMany({}),
+      case "reset_counters": {
+        // Reset run/worker data between sessions without deleting jobs/tasks
+        // This clears the "previous run" data so new runs start fresh
+        const [workersDeleted, runsDeleted] = await Promise.all([
           prisma.generatorWorker.deleteMany({}),
           prisma.generatorRun.deleteMany({}),
         ]);
         
         return NextResponse.json({
           success: true,
-          message: `Cleared ${jobsDeleted.count} jobs, ${tasksDeleted.count} tasks, ${runsDeleted.count} runs, ${workersDeleted.count} workers`,
+          message: `Reset counters: cleared ${runsDeleted.count} run(s), ${workersDeleted.count} worker(s)`,
+          runsDeleted: runsDeleted.count,
+          workersDeleted: workersDeleted.count,
+        });
+      }
+
+      case "release_orphaned_emails": {
+        // Find and release emails that are stuck as IN_USE without matching pending/running tasks
+        // This is a cleanup action for emails that got orphaned due to crashes or bugs
+        const orphanedEmails = await prisma.$queryRaw<{ email: string }[]>`
+          SELECT e.email 
+          FROM generator_emails e
+          LEFT JOIN generator_tasks t ON LOWER(t.email) = LOWER(e.email) AND t.status IN ('PENDING', 'RUNNING')
+          WHERE e.status = 'IN_USE' AND t.id IS NULL
+        `;
+        
+        if (orphanedEmails.length > 0) {
+          await prisma.generatorEmail.updateMany({
+            where: { 
+              email: { in: orphanedEmails.map(e => e.email.toLowerCase()) },
+              status: "IN_USE",
+            },
+            data: { status: "AVAILABLE" },
+          });
+        }
+        
+        return NextResponse.json({
+          success: true,
+          message: `Released ${orphanedEmails.length} orphaned email(s)`,
+          emailsReleased: orphanedEmails.length,
+        });
+      }
+
+      case "clear_all_data": {
+        // Delete all generator jobs, tasks, runs, and workers (for clearing test data)
+        // Also reset all emails to AVAILABLE
+        const [tasksDeleted, jobsDeleted, workersDeleted, runsDeleted, emailsReset] = await Promise.all([
+          prisma.generatorTask.deleteMany({}),
+          prisma.generatorJob.deleteMany({}),
+          prisma.generatorWorker.deleteMany({}),
+          prisma.generatorRun.deleteMany({}),
+          prisma.generatorEmail.updateMany({
+            where: { status: { in: ["IN_USE", "USED"] } },
+            data: { status: "AVAILABLE", usedAt: null },
+          }),
+        ]);
+        
+        return NextResponse.json({
+          success: true,
+          message: `Cleared ${jobsDeleted.count} jobs, ${tasksDeleted.count} tasks, ${runsDeleted.count} runs, ${workersDeleted.count} workers, reset ${emailsReset.count} emails`,
           tasksDeleted: tasksDeleted.count,
           jobsDeleted: jobsDeleted.count,
           runsDeleted: runsDeleted.count,
           workersDeleted: workersDeleted.count,
+          emailsReset: emailsReset.count,
         });
       }
 
