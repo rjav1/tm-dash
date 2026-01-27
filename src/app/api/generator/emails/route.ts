@@ -69,6 +69,10 @@ export async function GET(request: NextRequest) {
  * POST /api/generator/emails
  * Bulk add emails to the pool (one per line)
  * 
+ * Body:
+ * - emails: string (newline-separated list of emails)
+ * - imapProvider: string (optional, e.g., "aycd", "gmail")
+ * 
  * Automatically filters out:
  * - Emails that already exist in the pool
  * - Emails that already exist as accounts in the database
@@ -76,7 +80,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { emails } = body;
+    const { emails, imapProvider } = body;
 
     if (!emails || typeof emails !== "string") {
       return NextResponse.json(
@@ -122,7 +126,6 @@ export async function POST(request: NextRequest) {
 
     const skippedPool = existingPoolSet.size;
     const skippedAccount = existingAccountSet.size;
-    const totalSkipped = skippedPool + skippedAccount;
 
     if (newEmails.length === 0) {
       let message = "No new emails to add.";
@@ -138,11 +141,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Insert new emails
+    // Insert new emails with optional IMAP provider
     await prisma.generatorEmail.createMany({
       data: newEmails.map((email) => ({
         email,
         status: "AVAILABLE",
+        imapProvider: imapProvider || null,
       })),
       skipDuplicates: true,
     });
@@ -150,6 +154,7 @@ export async function POST(request: NextRequest) {
     let message = `Added ${newEmails.length} emails to pool.`;
     if (skippedPool > 0) message += ` ${skippedPool} already in pool.`;
     if (skippedAccount > 0) message += ` ${skippedAccount} already generated as accounts.`;
+    if (imapProvider) message += ` IMAP: ${imapProvider}`;
 
     return NextResponse.json({
       success: true,

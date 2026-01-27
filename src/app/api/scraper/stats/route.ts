@@ -3,6 +3,8 @@ import prisma from "@/lib/db";
 
 export interface ScraperStats {
   isOnline: boolean;
+  hasRecentErrors: boolean;  // True if recent jobs have failed
+  lastError: string | null;  // Most recent error message
   currentRun: {
     id: string;
     workerId: string;
@@ -18,6 +20,7 @@ export interface ScraperStats {
     status: string;
     createdAt: string;
     completedAt: string | null;
+    errorMessage: string | null;
   }>;
   queuedJobsCount: number;
 }
@@ -40,7 +43,7 @@ export async function GET() {
       orderBy: { lastHeartbeat: "desc" },
     });
 
-    // Get recent jobs
+    // Get recent jobs (including error messages)
     const recentJobs = await prisma.scrapeJob.findMany({
       orderBy: { createdAt: "desc" },
       take: 10,
@@ -50,6 +53,7 @@ export async function GET() {
         status: true,
         createdAt: true,
         completedAt: true,
+        errorMessage: true,
       },
     });
 
@@ -58,8 +62,21 @@ export async function GET() {
       where: { status: "QUEUED" },
     });
 
+    // Check for recent errors (last 5 minutes)
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const recentFailedJobs = recentJobs.filter(
+      (job) =>
+        job.status === "FAILED" &&
+        job.completedAt &&
+        new Date(job.completedAt) > fiveMinutesAgo
+    );
+    const hasRecentErrors = recentFailedJobs.length > 0;
+    const lastError = recentFailedJobs[0]?.errorMessage || null;
+
     const stats: ScraperStats = {
       isOnline: !!activeRun,
+      hasRecentErrors,
+      lastError,
       currentRun: activeRun
         ? {
             id: activeRun.id,
@@ -77,6 +94,7 @@ export async function GET() {
         status: job.status,
         createdAt: job.createdAt.toISOString(),
         completedAt: job.completedAt?.toISOString() || null,
+        errorMessage: job.errorMessage,
       })),
       queuedJobsCount,
     };
@@ -87,6 +105,8 @@ export async function GET() {
     return NextResponse.json(
       {
         isOnline: false,
+        hasRecentErrors: false,
+        lastError: null,
         currentRun: null,
         recentJobs: [],
         queuedJobsCount: 0,

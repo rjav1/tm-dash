@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { BarChart3, ShoppingCart, Search, ArrowUpDown, X, RefreshCw, DollarSign, Wifi, WifiOff } from "lucide-react";
+import { BarChart3, ShoppingCart, Search, ArrowUpDown, X, RefreshCw, DollarSign, Wifi, WifiOff, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,8 @@ import { useToast } from "@/hooks/use-toast";
 
 interface ScraperStats {
   isOnline: boolean;
+  hasRecentErrors?: boolean;
+  lastError?: string | null;
   currentRun: {
     id: string;
     workerId: string;
@@ -339,14 +341,25 @@ export default function EventsPage() {
           </div>
           {/* Scraper Status Badge */}
           {scraperStats?.isOnline ? (
-            <Badge 
-              variant="outline" 
-              className="bg-green-50 text-green-700 border-green-200"
-              title={scraperStats.currentRun ? `Worker: ${scraperStats.currentRun.workerId} | Jobs: ${scraperStats.currentRun.jobsSuccess} success, ${scraperStats.currentRun.jobsFailed} failed` : "Scraper online"}
-            >
-              <Wifi className="w-3 h-3 mr-1" />
-              Scraper Online
-            </Badge>
+            scraperStats.hasRecentErrors ? (
+              <Badge 
+                variant="outline" 
+                className="bg-red-50 text-red-700 border-red-200"
+                title={`Recent error: ${scraperStats.lastError || "Unknown error"}`}
+              >
+                <AlertTriangle className="w-3 h-3 mr-1" />
+                Scraper Error
+              </Badge>
+            ) : (
+              <Badge 
+                variant="outline" 
+                className="bg-green-50 text-green-700 border-green-200"
+                title={scraperStats.currentRun ? `Worker: ${scraperStats.currentRun.workerId} | Jobs: ${scraperStats.currentRun.jobsSuccess} success, ${scraperStats.currentRun.jobsFailed} failed` : "Scraper online"}
+              >
+                <Wifi className="w-3 h-3 mr-1" />
+                Scraper Online
+              </Badge>
+            )
           ) : (
             <Badge 
               variant="outline" 

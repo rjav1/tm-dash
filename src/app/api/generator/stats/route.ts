@@ -108,13 +108,11 @@ export async function GET(request: NextRequest) {
     
     // Auto-abort runs that have been stale for more than 5 minutes (no heartbeat)
     // This cleans up orphaned runs from crashed daemons
+    // Runs without recent heartbeat are considered stale
     await prisma.generatorRun.updateMany({
       where: {
         status: "RUNNING",
-        OR: [
-          { lastHeartbeat: null, startedAt: { lt: fiveMinutesAgo } },
-          { lastHeartbeat: { lt: fiveMinutesAgo } },
-        ],
+        lastHeartbeat: { lt: fiveMinutesAgo },
       },
       data: {
         status: "ABORTED",
