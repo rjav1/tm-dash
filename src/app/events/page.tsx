@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { BarChart3, ShoppingCart, Search, ArrowUpDown, X, RefreshCw, DollarSign } from "lucide-react";
+import { BarChart3, ShoppingCart, Search, ArrowUpDown, X, RefreshCw, DollarSign, Wifi, WifiOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,17 @@ import { AddEventDialog } from "@/components/add-event-dialog";
 import { formatDateWithDay, getDayOfWeek } from "@/lib/utils";
 import { PaginationControls } from "@/components/pagination-controls";
 import { useToast } from "@/hooks/use-toast";
+
+interface ScraperStats {
+  isOnline: boolean;
+  currentRun: {
+    id: string;
+    workerId: string;
+    lastHeartbeat: string;
+    jobsSuccess: number;
+    jobsFailed: number;
+  } | null;
+}
 
 interface Event {
   id: string;
@@ -62,7 +73,27 @@ export default function EventsPage() {
   const [syncingPrices, setSyncingPrices] = useState(false);
   const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
   const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
+  const [scraperStats, setScraperStats] = useState<ScraperStats | null>(null);
   const { toast } = useToast();
+
+  // Fetch scraper status
+  const fetchScraperStats = useCallback(async () => {
+    try {
+      const response = await fetch("/api/scraper/stats");
+      const data = await response.json();
+      setScraperStats(data);
+    } catch (error) {
+      console.error("Failed to fetch scraper stats:", error);
+      setScraperStats({ isOnline: false, currentRun: null });
+    }
+  }, []);
+
+  // Poll scraper stats every 10 seconds
+  useEffect(() => {
+    fetchScraperStats();
+    const interval = setInterval(fetchScraperStats, 10000);
+    return () => clearInterval(interval);
+  }, [fetchScraperStats]);
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -299,11 +330,33 @@ export default function EventsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Events</h1>
-          <p className="text-muted-foreground">
-            Track events and their performance metrics
-          </p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-3xl font-bold">Events</h1>
+            <p className="text-muted-foreground">
+              Track events and their performance metrics
+            </p>
+          </div>
+          {/* Scraper Status Badge */}
+          {scraperStats?.isOnline ? (
+            <Badge 
+              variant="outline" 
+              className="bg-green-50 text-green-700 border-green-200"
+              title={scraperStats.currentRun ? `Worker: ${scraperStats.currentRun.workerId} | Jobs: ${scraperStats.currentRun.jobsSuccess} success, ${scraperStats.currentRun.jobsFailed} failed` : "Scraper online"}
+            >
+              <Wifi className="w-3 h-3 mr-1" />
+              Scraper Online
+            </Badge>
+          ) : (
+            <Badge 
+              variant="outline" 
+              className="bg-gray-50 text-gray-500"
+              title="VPS scraper is offline. Start scrape_daemon.py on your VPS to enable TM/VS scraping."
+            >
+              <WifiOff className="w-3 h-3 mr-1" />
+              Scraper Offline
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {selectedEventIds.size > 0 && (

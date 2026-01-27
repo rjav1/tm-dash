@@ -999,3 +999,82 @@ model CheckoutConfig {
 
   @@map("checkout_config")
 }
+
+// =============================================================================
+// Scrape Service (VPS-based web scraping)
+// =============================================================================
+
+enum ScrapeJobType {
+  TICKETMASTER_EVENT
+  VIVID_SEATS_PRICE
+}
+
+enum ScrapeJobStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model ScrapeJob {
+  id          String          @id @default(cuid())
+  type        ScrapeJobType   // What kind of scrape
+  status      ScrapeJobStatus @default(QUEUED)
+  
+  // Input data (JSON)
+  inputData   String          @map("input_data") @db.Text // JSON: { eventId, artistName, venue, date, url, etc. }
+  
+  // Output data (JSON) - populated when complete
+  outputData  String?         @map("output_data") @db.Text // JSON: scraped result
+  
+  // Error info
+  errorCode   String?         @map("error_code")
+  errorMessage String?        @map("error_message")
+  
+  // Tracking
+  workerId    String?         @map("worker_id")
+  runId       String?         @map("run_id")
+  
+  createdAt   DateTime        @default(now()) @map("created_at")
+  startedAt   DateTime?       @map("started_at")
+  completedAt DateTime?       @map("completed_at")
+  
+  // Relations
+  run         ScrapeRun?      @relation(fields: [runId], references: [id])
+
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+  @@map("scrape_jobs")
+}
+
+model ScrapeRun {
+  id            String    @id @default(cuid())
+  workerId      String    @map("worker_id") // Machine identifier
+  status        String    @default("RUNNING") // RUNNING, COMPLETED, ABORTED
+  
+  startedAt     DateTime  @default(now()) @map("started_at")
+  endedAt       DateTime? @map("ended_at")
+  lastHeartbeat DateTime  @default(now()) @map("last_heartbeat")
+  
+  // Stats
+  jobsSuccess   Int       @default(0) @map("jobs_success")
+  jobsFailed    Int       @default(0) @map("jobs_failed")
+  
+  // Relations
+  jobs          ScrapeJob[]
+
+  @@index([workerId])
+  @@index([status])
+  @@index([lastHeartbeat])
+  @@map("scrape_runs")
+}
+
+model ScrapeConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   // JSON string for complex values
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("scrape_config")
+}

@@ -43,6 +43,8 @@ import {
   Calendar,
   Filter,
   Percent,
+  ChevronDown,
+  Zap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -73,6 +75,13 @@ import {
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { PaginationControls } from "@/components/pagination-controls";
 import { cn } from "@/lib/utils";
@@ -390,7 +399,10 @@ export default function SalesPage() {
   // Bulk selection state
   const [selectedSaleIds, setSelectedSaleIds] = useState<Set<string>>(new Set());
   const [bulkRefreshing, setBulkRefreshing] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentEmail: "" });
+  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentEmail: "", label: "" });
+  
+  // Refresh all alerts state
+  const [refreshingAllAlerts, setRefreshingAllAlerts] = useState(false);
   
   const limit = 50;
 
@@ -710,7 +722,7 @@ export default function SalesPage() {
     if (saleIds.length === 0) return;
 
     setBulkRefreshing(true);
-    setBulkProgress({ current: 0, total: saleIds.length, currentEmail: "" });
+    setBulkProgress({ current: 0, total: saleIds.length, currentEmail: "", label: "Refreshing selected sales..." });
 
     let successCount = 0;
     let failCount = 0;
@@ -723,6 +735,7 @@ export default function SalesPage() {
         current: i + 1,
         total: saleIds.length,
         currentEmail: sale?.listing?.accountEmail || sale?.listing?.purchase?.account?.email || "Unknown",
+        label: "Refreshing selected sales...",
       });
 
       try {
@@ -755,6 +768,84 @@ export default function SalesPage() {
     });
     
     fetchSales();
+  };
+
+  // Refresh all sales with Alert status
+  const handleRefreshAllAlerts = async () => {
+    // First, fetch all alert sales (status 40)
+    setRefreshingAllAlerts(true);
+    setBulkRefreshing(true);
+    setBulkProgress({ current: 0, total: 0, currentEmail: "", label: "Finding alert sales..." });
+
+    try {
+      // Fetch all sales with alert status
+      const response = await fetch("/api/sales?status=alert&limit=500");
+      const data = await response.json();
+      
+      if (!data.success || !data.sales?.length) {
+        toast({
+          title: "No Alert Sales",
+          description: "No sales with Alert status found",
+        });
+        setBulkRefreshing(false);
+        setRefreshingAllAlerts(false);
+        return;
+      }
+
+      const alertSales = data.sales as Sale[];
+      setBulkProgress({ current: 0, total: alertSales.length, currentEmail: "", label: "Refreshing accounts..." });
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (let i = 0; i < alertSales.length; i++) {
+        const sale = alertSales[i];
+        const accountEmail = sale.listing?.accountEmail || sale.listing?.purchase?.account?.email || "Unknown";
+        
+        setBulkProgress({
+          current: i + 1,
+          total: alertSales.length,
+          currentEmail: accountEmail,
+          label: "Refreshing accounts...",
+        });
+
+        try {
+          const refreshResponse = await fetch(`/api/sales/${sale.id}/refresh`, {
+            method: "POST",
+          });
+          const refreshData = await refreshResponse.json();
+          
+          if (refreshData.success) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch {
+          failCount++;
+        }
+
+        // Small delay between requests
+        if (i < alertSales.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+
+      toast({
+        title: "Refresh All Alerts Complete",
+        description: `${successCount} accounts synced, ${failCount} failed`,
+      });
+
+      fetchSales();
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to refresh alerts",
+        variant: "destructive",
+      });
+    } finally {
+      setBulkRefreshing(false);
+      setRefreshingAllAlerts(false);
+    }
   };
 
   // Clear all filters
@@ -846,18 +937,60 @@ export default function SalesPage() {
             Track sales, invoices, and profitability from TicketVault POS
           </p>
         </div>
-        <Button
-          onClick={handleSyncAll}
-          disabled={salesSyncing || invoicesSyncing}
-          size="lg"
-        >
-          {salesSyncing || invoicesSyncing ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
+        <div className="flex items-center gap-2">
+          {/* Refresh All Alerts Button */}
+          {salesStats && salesStats.pendingSales > 0 && (
+            <Button
+              variant="outline"
+              onClick={handleRefreshAllAlerts}
+              disabled={refreshingAllAlerts || bulkRefreshing}
+              className="border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400"
+            >
+              {refreshingAllAlerts ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Zap className="mr-2 h-4 w-4" />
+              )}
+              Refresh All Alerts
+              <Badge variant="secondary" className="ml-2 bg-orange-100 text-orange-700">
+                {salesStats.pendingSales}
+              </Badge>
+            </Button>
           )}
-          Sync All from POS
-        </Button>
+
+          {/* Sync Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                disabled={salesSyncing || invoicesSyncing}
+                size="lg"
+              >
+                {salesSyncing || invoicesSyncing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Sync from POS
+                <ChevronDown className="ml-2 h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={handleSyncAll} disabled={salesSyncing || invoicesSyncing}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Sync All
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleSyncSales} disabled={salesSyncing}>
+                <Receipt className="mr-2 h-4 w-4" />
+                Sync Sales Only
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleSyncInvoices} disabled={invoicesSyncing}>
+                <CreditCard className="mr-2 h-4 w-4" />
+                Sync Invoices Only
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -1873,21 +2006,27 @@ export default function SalesPage() {
       <Dialog open={bulkRefreshing} onOpenChange={() => {}}>
         <DialogContent className="sm:max-w-md" onPointerDownOutside={(e) => e.preventDefault()}>
           <DialogHeader>
-            <DialogTitle>Refreshing Sales</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-orange-500" />
+              {refreshingAllAlerts ? "Refreshing All Alerts" : "Refreshing Selected Sales"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {bulkProgress.label && (
+              <p className="text-sm font-medium">{bulkProgress.label}</p>
+            )}
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Progress</span>
               <span className="font-medium">{bulkProgress.current} / {bulkProgress.total}</span>
             </div>
-            <Progress value={(bulkProgress.current / bulkProgress.total) * 100} />
+            <Progress value={bulkProgress.total > 0 ? (bulkProgress.current / bulkProgress.total) * 100 : 0} />
             {bulkProgress.currentEmail && (
               <div className="text-sm text-muted-foreground">
-                Processing: <span className="font-mono">{bulkProgress.currentEmail}</span>
+                Processing: <span className="font-mono text-foreground">{bulkProgress.currentEmail}</span>
               </div>
             )}
             <p className="text-xs text-muted-foreground">
-              Triggering account sync for each sale. This may take a moment...
+              Triggering account sync in TicketVault for each sale. This may take a moment...
             </p>
           </div>
         </DialogContent>
