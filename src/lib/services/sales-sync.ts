@@ -21,34 +21,23 @@
  * - One Sale belongs to exactly ONE Invoice
  * - One Listing can have MULTIPLE Sales (partial quantity sold over time)
  *
- * PROFIT CALCULATION - THE RIGHT WAY:
- * ------------------------------------
- * Total Profit = Sum(invoice.totalAmount) - Sum(invoice.totalCost)
+ * PROFIT CALCULATION:
+ * -------------------
+ * Total Profit = Total Revenue - Total Cost
  *
- * Where:
- * - invoice.totalAmount = NET payout from TicketVault (AFTER their fees)
- *   This is synced from TicketVault's "Payout" field
- * - invoice.totalCost = Our purchase cost for the tickets
+ * REVENUE (from TicketVault):
+ * - Sum of invoice.totalAmount = NET payout from TicketVault (AFTER their fees)
+ * - This is the actual money we receive
  *
- * This matches exactly what TicketVault shows when you sum your invoices.
+ * COST (derived from OUR Purchase records, NOT TicketVault):
+ * - For each sale: cost = (purchase.totalPrice / purchase.quantity) * sale.quantity
+ * - Total cost = Sum of all sale costs
+ * - This ensures we use our actual purchase prices, not what TicketVault thinks
  *
- * PROFIT CALCULATION - THE WRONG WAY (DO NOT DO THIS):
- * -----------------------------------------------------
- * ❌ Sum(sale.salePrice * feeMultiplier) - Sum(sale.cost * sale.quantity)
- *
- * Why this is wrong:
- * 1. sale.salePrice is GROSS (before fees), and fee estimation is imprecise
- * 2. If an Invoice contains multiple Sales, you can't accurately split the
- *    invoice's net payout across individual sales
- * 3. The invoice.totalAmount is the actual net payout - use it directly!
- *
- * HISTORICAL BUG (Fixed Jan 2026):
- * --------------------------------
- * Previous code was using invoice.totalAmount PER SALE, which caused
- * double-counting when one invoice had multiple sales. For example:
- *   Invoice #123: totalAmount = $500, contains Sale A and Sale B
- *   Bug: Added $500 for Sale A AND $500 for Sale B = $1000 (wrong!)
- *   Fix: Sum invoices directly = $500 (correct!)
+ * Why we derive cost ourselves:
+ * - TicketVault's cost data may be incomplete or inaccurate
+ * - Our Purchase records have the true cost we paid
+ * - We control the data integrity
  *
  * =============================================================================
  */
@@ -87,11 +76,9 @@ export interface InvoicesSyncResult {
 /**
  * Sales Statistics
  *
- * IMPORTANT: Revenue, Cost, and Profit are calculated from INVOICES, not Sales.
- * This ensures our numbers match exactly what TicketVault shows.
- *
- * - totalRevenue = Sum of invoice.totalAmount (net payout after fees)
- * - totalCost = Sum of invoice.totalCost (our purchase cost)
+ * PROFIT CALCULATION:
+ * - totalRevenue = Sum of invoice.totalAmount (net payout from TicketVault after fees)
+ * - totalCost = Derived from our Purchase records (purchase.totalPrice / purchase.quantity * sale.quantity)
  * - totalProfit = totalRevenue - totalCost
  */
 export interface SalesStats {
@@ -99,7 +86,7 @@ export interface SalesStats {
   pendingSales: number;       // Status 20 (Pending) or 40 (Alert)
   completedSales: number;     // Status 1 (Complete) or isComplete flag
   totalRevenue: number;       // From invoices - NET payout after fees
-  totalCost: number;          // From invoices - our purchase cost
+  totalCost: number;          // Derived from our Purchase records
   totalProfit: number;        // totalRevenue - totalCost
   avgProfitPerDay: number;
   daysWithSales: number;
@@ -585,15 +572,15 @@ export async function syncAllFromPos(): Promise<{
  * - Status 40 = Alert (confirmed, awaiting delivery)
  * - Status 20 = Pending (not confirmed)
  * 
- * IMPORTANT: We calculate profit directly from INVOICES, not from sales.
- * This ensures our numbers match exactly what the user sees in TicketVault.
- * Invoice has:
- *   - totalAmount: Net payout (after TicketVault fees)
- *   - totalCost: Our purchase cost
- * Profit = Sum(totalAmount) - Sum(totalCost)
+ * PROFIT CALCULATION:
+ * - Revenue: Sum of invoice.totalAmount (net payout from TicketVault after fees)
+ * - Cost: Derived from our own Purchase records (NOT from TicketVault)
+ *   - Cost per ticket = purchase.totalPrice / purchase.quantity
+ *   - Sale cost = cost per ticket * sale.quantity
+ * - Profit = Total Revenue - Total Cost (derived)
  */
 export async function getSalesStats(): Promise<SalesStats> {
-  const [totalSales, pendingSales, completedSales, salesWithDates, invoiceAggregates] =
+  const [totalSales, pendingSales, completedSales, salesWithPurchases, invoiceAggregates] =
     await Promise.all([
       prisma.sale.count(),
       // Pending = Status 40 (Alert) + Status 20 (Pending) - not delivered yet
@@ -614,36 +601,57 @@ export async function getSalesStats(): Promise<SalesStats> {
           ],
         } 
       }),
-      // Get sale dates for days tracking
+      // Get sales with their linked purchases for cost calculation
       prisma.sale.findMany({
         select: {
           saleDate: true,
+          quantity: true,
+          listing: {
+            select: {
+              purchase: {
+                select: {
+                  totalPrice: true,
+                  quantity: true,
+                },
+              },
+            },
+          },
         },
       }),
-      // Get totals directly from invoices - this matches TicketVault exactly
+      // Get revenue from invoices (net payout after fees)
       prisma.invoice.aggregate({
         where: { isCancelled: false },
         _sum: {
-          totalAmount: true, // Net payout after fees
-          totalCost: true,   // Our purchase cost
+          totalAmount: true, // Net payout after fees - this is our actual revenue
         },
       }),
     ]);
 
-  // Revenue and cost directly from invoices - matches TicketVault
+  // Revenue from invoices (net payout after TicketVault fees)
   const totalRevenue = Number(invoiceAggregates._sum.totalAmount || 0);
-  const totalCost = Number(invoiceAggregates._sum.totalCost || 0);
-  const totalProfit = totalRevenue - totalCost;
-
-  // Track unique days from sales
+  
+  // Calculate total cost from our own Purchase records
+  // Cost = sum of (purchase.totalPrice / purchase.quantity * sale.quantity) for each sale
+  let totalCost = 0;
   const uniqueDays = new Set<string>();
-  for (const sale of salesWithDates) {
+  
+  for (const sale of salesWithPurchases) {
+    // Track unique sale dates
     if (sale.saleDate) {
       const dateStr = new Date(sale.saleDate).toISOString().split('T')[0];
       uniqueDays.add(dateStr);
     }
+    
+    // Calculate cost from linked purchase
+    const purchase = sale.listing?.purchase;
+    if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
+      const costPerTicket = Number(purchase.totalPrice) / purchase.quantity;
+      const saleCost = costPerTicket * sale.quantity;
+      totalCost += saleCost;
+    }
   }
   
+  const totalProfit = totalRevenue - totalCost;
   const daysWithSales = uniqueDays.size || 1; // Avoid division by zero
   const avgProfitPerDay = totalProfit / daysWithSales;
 

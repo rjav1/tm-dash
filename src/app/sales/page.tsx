@@ -7,21 +7,20 @@
  * PROFIT CALCULATION
  * =============================================================================
  *
- * This page has TWO sources of profit data:
+ * REVENUE: From TicketVault invoice.totalAmount (net payout after their fees)
+ * 
+ * COST: Derived from OUR Purchase records (NOT from TicketVault)
+ *   - Cost per ticket = purchase.totalPrice / purchase.quantity
+ *   - Sale cost = cost per ticket * sale.quantity
  *
- * 1. salesStats (from server API):
- *    - Accurate totals calculated from invoice aggregates
- *    - Use for: Total Profit card, official reporting
+ * PROFIT = Revenue - Cost (derived)
  *
- * 2. enhancedMetrics (client-side calculation):
- *    - Estimates calculated from current page's sales data
- *    - Uses salePrice * 0.93 as fee estimate
- *    - Use for: Per-page breakdown, win/loss ratios on visible items
+ * This ensures we control our cost data and don't rely on TicketVault's values.
  *
- * For accurate TOTAL profit, always rely on salesStats from the API.
- * The client-side enhancedMetrics are estimates for the current page only.
+ * Data sources:
+ * 1. salesStats (from server API) - Official totals for dashboard cards
+ * 2. enhancedMetrics (client-side) - Per-page breakdown using same formula
  *
- * See: docs/PROFIT_CALCULATION.md for full explanation.
  * =============================================================================
  */
 
@@ -414,8 +413,8 @@ export default function SalesPage() {
   
   // Calculate enhanced metrics from current page data
   // NOTE: These are page-level stats only. Official totals come from salesStats (server-side).
-  // For per-sale profit, we use salePrice * 0.93 (7% fee) as an estimate since we can't
-  // use invoice.totalAmount (that's per-invoice, not per-sale, and would double-count).
+  // COST: Derived from our Purchase records (purchase.totalPrice / purchase.quantity)
+  // REVENUE: salePrice * 0.93 (7% fee estimate) since invoice.totalAmount is per-invoice
   const enhancedMetrics = useMemo(() => {
     if (!sales.length) return null;
     
@@ -430,18 +429,20 @@ export default function SalesPage() {
     let missingCostCount = 0;
     
     sales.forEach((sale) => {
-      // Cost priority: sale.cost > listing.cost > (purchase.totalPrice / quantity)
-      // Use totalPrice/quantity for true cost with fees, not priceEach (which may be pre-fees)
-      const purchaseCost = sale.listing?.purchase?.totalPrice && sale.listing?.purchase?.quantity
-        ? Number(sale.listing.purchase.totalPrice) / sale.listing.purchase.quantity
-        : 0;
-      const unitCost = Number(sale.cost || sale.listing?.cost || purchaseCost);
+      // COST: Derive from our Purchase records ONLY (not TicketVault's cost values)
+      // Cost per ticket = purchase.totalPrice / purchase.quantity
+      const purchase = sale.listing?.purchase;
+      let unitCost = 0;
+      if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
+        unitCost = Number(purchase.totalPrice) / purchase.quantity;
+      }
       const saleTotalCost = unitCost * sale.quantity;
-      // Use salePrice * feeMultiplier for net payout estimate
+      
+      // REVENUE: Use salePrice * feeMultiplier for net payout estimate
       // DO NOT use invoice.totalAmount - that's per-invoice, not per-sale!
       const netPayout = Number(sale.salePrice || 0) * feeMultiplier;
       
-      // Track sales with missing cost
+      // Track sales with missing cost (no linked purchase)
       if (unitCost === 0) missingCostCount++;
       
       totalCost += saleTotalCost;
@@ -1317,15 +1318,20 @@ export default function SalesPage() {
                   sales.map((sale) => {
                     const poNumber = sale.extPONumber || sale.listing?.extPONumber || sale.listing?.purchase?.dashboardPoNumber || null;
                     const accountEmail = sale.listing?.accountEmail || sale.listing?.purchase?.account?.email || null;
-                    // Cost priority: sale.cost > listing.cost > (purchase.totalPrice / quantity)
-                    // Use totalPrice/quantity for true cost with fees, not priceEach (which may be pre-fees)
-                    const purchaseCost = sale.listing?.purchase?.totalPrice && sale.listing?.purchase?.quantity
-                      ? Number(sale.listing.purchase.totalPrice) / sale.listing.purchase.quantity
-                      : 0;
-                    const unitCost = Number(sale.cost || sale.listing?.cost || purchaseCost);
+                    
+                    // COST: Derive from our Purchase records ONLY (not TicketVault's cost values)
+                    // Cost per ticket = purchase.totalPrice / purchase.quantity
+                    const purchase = sale.listing?.purchase;
+                    let unitCost = 0;
+                    if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
+                      unitCost = Number(purchase.totalPrice) / purchase.quantity;
+                    }
                     const totalCost = unitCost * sale.quantity;
-                    // Use invoice totalAmount (net payout after fees) if available, else fall back to salePrice
-                    const netPayout = Number(sale.invoice?.totalAmount || sale.salePrice || 0);
+                    
+                    // PAYOUT: Use salePrice * 0.93 (7% fee estimate) for per-sale payout
+                    // Note: invoice.totalAmount is per-invoice, not per-sale, so we estimate
+                    const feeMultiplier = 0.93;
+                    const netPayout = Number(sale.salePrice || 0) * feeMultiplier;
                     const profit = netPayout - totalCost;
                     const roi = formatROI(totalCost, netPayout);
                     
@@ -1975,11 +1981,23 @@ export default function SalesPage() {
                 </div>
               </div>
               
-              {/* Profit Calculation */}
-              {(selectedSale.cost || selectedSale.listing?.cost) && (() => {
-                const unitCost = Number(selectedSale.cost || selectedSale.listing?.cost || 0);
+              {/* Profit Calculation - Cost derived from our Purchase records */}
+              {(() => {
+                // COST: Derive from our Purchase records ONLY
+                const purchase = selectedSale.listing?.purchase;
+                let unitCost = 0;
+                if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
+                  unitCost = Number(purchase.totalPrice) / purchase.quantity;
+                }
+                
+                // Only show profit section if we have cost data
+                if (unitCost === 0) return null;
+                
                 const totalCost = unitCost * selectedSale.quantity;
-                const profit = Number(selectedSale.salePrice) - totalCost;
+                // PAYOUT: Use salePrice * 0.93 (7% fee estimate)
+                const feeMultiplier = 0.93;
+                const netPayout = Number(selectedSale.salePrice || 0) * feeMultiplier;
+                const profit = netPayout - totalCost;
                 const roi = totalCost > 0 ? (profit / totalCost) * 100 : 0;
                 return (
                   <div className="space-y-2">
