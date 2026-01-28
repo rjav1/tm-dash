@@ -269,6 +269,31 @@ interface ImapProvider {
   updatedAt: string;
 }
 
+interface CompletedTask {
+  id: string;
+  email: string;
+  status: string;
+  errorMessage?: string | null;
+  lastError?: string | null;
+  retryCount?: number;
+  password?: string | null;
+  phoneNumber?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  imported?: boolean;
+  completedAt: string | null;
+  job?: {
+    id: string;
+    name: string | null;
+  };
+}
+
+interface CompletedTaskStats {
+  failed: number;
+  unimported: number;
+  imported: number;
+}
+
 // Status badge helper
 function getStatusBadge(status: string) {
   switch (status) {
@@ -343,6 +368,14 @@ export default function GeneratorPage() {
   const [newEmails, setNewEmails] = useState("");
   const [addingEmails, setAddingEmails] = useState(false);
   const [selectedEmailProvider, setSelectedEmailProvider] = useState<string>("__auto__");
+
+  // Completed tasks state (failed + unimported successful)
+  const [failedTasks, setFailedTasks] = useState<CompletedTask[]>([]);
+  const [unimportedTasks, setUnimportedTasks] = useState<CompletedTask[]>([]);
+  const [completedTaskStats, setCompletedTaskStats] = useState<CompletedTaskStats>({ failed: 0, unimported: 0, imported: 0 });
+  const [selectedCompletedIds, setSelectedCompletedIds] = useState<Set<string>>(new Set());
+  const [importingCompleted, setImportingCompleted] = useState(false);
+  const [emailsSubTab, setEmailsSubTab] = useState<"pool" | "results">("pool");
 
   // Proxy pool state
   const [proxies, setProxies] = useState<GeneratorProxy[]>([]);
@@ -430,6 +463,19 @@ export default function GeneratorPage() {
     }
   }, []);
 
+  const fetchCompletedTasks = useCallback(async () => {
+    try {
+      const response = await fetch("/api/generator/completed-tasks?limit=200");
+      if (!response.ok) throw new Error("Failed to fetch completed tasks");
+      const data = await response.json();
+      setFailedTasks(data.failed || []);
+      setUnimportedTasks(data.unimported || []);
+      setCompletedTaskStats(data.stats || { failed: 0, unimported: 0, imported: 0 });
+    } catch (error) {
+      console.error("Error fetching completed tasks:", error);
+    }
+  }, []);
+
   const fetchProxies = useCallback(async () => {
     try {
       const [proxiesRes, badProxiesRes] = await Promise.all([
@@ -492,6 +538,7 @@ export default function GeneratorPage() {
     fetchStats();
     fetchJobs();
     fetchEmails();
+    fetchCompletedTasks();
     fetchProxies();
     fetchTags();
     fetchConfig();
@@ -627,6 +674,71 @@ export default function GeneratorPage() {
     } catch (error) {
       toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to delete", variant: "destructive" });
     }
+  };
+
+  // Completed tasks handlers
+  const handleImportCompletedTasks = async (taskIds?: string[]) => {
+    const idsToImport = taskIds || Array.from(selectedCompletedIds);
+    if (idsToImport.length === 0) {
+      toast({ title: "Error", description: "No tasks selected", variant: "destructive" });
+      return;
+    }
+    
+    setImportingCompleted(true);
+    try {
+      const response = await fetch("/api/generator/completed-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskIds: idsToImport, tagId: selectedTagId === "__none__" ? null : selectedTagId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      toast({ title: "Imported", description: data.message });
+      setSelectedCompletedIds(new Set());
+      fetchCompletedTasks();
+      fetchStats();
+    } catch (error) {
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to import", variant: "destructive" });
+    } finally {
+      setImportingCompleted(false);
+    }
+  };
+
+  const handleClearFailedTasks = async () => {
+    try {
+      const response = await fetch("/api/generator/completed-tasks", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clearAll: true, action: "clear_failed" }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      toast({ title: "Cleared", description: data.message });
+      fetchCompletedTasks();
+      fetchStats();
+    } catch (error) {
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to clear", variant: "destructive" });
+    }
+  };
+
+  const toggleCompletedSelection = (taskId: string) => {
+    setSelectedCompletedIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(taskId)) {
+        newSet.delete(taskId);
+      } else {
+        newSet.add(taskId);
+      }
+      return newSet;
+    });
+  };
+
+  const selectAllUnimported = () => {
+    setSelectedCompletedIds(new Set(unimportedTasks.map(t => t.id)));
+  };
+
+  const clearCompletedSelection = () => {
+    setSelectedCompletedIds(new Set());
   };
 
   // Proxy handlers
@@ -916,7 +1028,7 @@ export default function GeneratorPage() {
   const requestedCount = parseInt(emailCount, 10) || 0;
   const canSubmit = requestedCount > 0 && requestedCount <= (stats?.pools.emailsAvailable || 0);
   const successfulTasks = expandedJobTasks.filter((t) => t.status === "SUCCESS" && !t.imported);
-  const failedTasks = expandedJobTasks.filter((t) => t.status === "FAILED");
+  const expandedFailedTasks = expandedJobTasks.filter((t) => t.status === "FAILED");
   const runningTasks = stats?.workers.threads.filter(w => w.status === "PROCESSING") || [];
 
   return (
@@ -1498,107 +1610,277 @@ export default function GeneratorPage() {
 
         {/* EMAILS TAB */}
         <TabsContent value="emails" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-3">
-            {/* Add Emails Card */}
-            <Card className="md:col-span-1">
-              <CardHeader>
-                <CardTitle>Add Emails</CardTitle>
-                <CardDescription>Add emails to the pool (one per line)</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Textarea
-                  placeholder="email1@example.com&#10;email2@example.com&#10;..."
-                  value={newEmails}
-                  onChange={(e) => setNewEmails(e.target.value)}
-                  rows={8}
-                />
-                <div className="space-y-2">
-                  <Label>IMAP Provider (Optional)</Label>
-                  <Select value={selectedEmailProvider} onValueChange={setSelectedEmailProvider}>
-                    <SelectTrigger><SelectValue placeholder="Auto-detect" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__auto__">Auto-detect</SelectItem>
-                      <SelectItem value="aycd">AYCD Inbox</SelectItem>
-                      <SelectItem value="gmail">Gmail IMAP</SelectItem>
-                      {imapProviders.filter(p => p.isEnabled).map(p => (
-                        <SelectItem key={p.id} value={p.name}>{p.displayName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button 
-                  className="w-full" 
-                  onClick={handleAddEmails}
-                  disabled={addingEmails || !newEmails.trim()}
-                >
-                  {addingEmails ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
-                  Add Emails
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Email Pool Card */}
-            <Card className="md:col-span-2">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Email Pool</CardTitle>
-                    <CardDescription>
-                      {emailStats.AVAILABLE} available · {emailStats.IN_USE} in use · {emailStats.USED || 0} used
-                    </CardDescription>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => handleDeleteEmails([], true, "USED")}>
-                      <Trash2 className="mr-2 h-4 w-4" />Clear Used
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="max-h-[400px] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Email</TableHead>
-                        <TableHead>IMAP</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Added</TableHead>
-                        <TableHead></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {emails.slice(0, 100).map((email) => (
-                        <TableRow key={email.id}>
-                          <TableCell className="font-mono text-sm">{email.email}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{email.imapProvider || "auto"}</Badge>
-                          </TableCell>
-                          <TableCell>{getStatusBadge(email.status)}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {formatDate(email.createdAt)}
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteEmails([email.id])}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                  {emails.length > 100 && (
-                    <p className="text-center text-sm text-muted-foreground py-2">
-                      Showing 100 of {emails.length} emails
-                    </p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+          {/* Sub-tabs for Pool vs Results */}
+          <div className="flex gap-2 border-b pb-2">
+            <Button
+              variant={emailsSubTab === "pool" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setEmailsSubTab("pool")}
+            >
+              <Mail className="mr-2 h-4 w-4" />
+              Email Pool
+              <Badge variant="secondary" className="ml-2">{emailStats.AVAILABLE}</Badge>
+            </Button>
+            <Button
+              variant={emailsSubTab === "results" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => { setEmailsSubTab("results"); fetchCompletedTasks(); }}
+            >
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+              Results
+              {(completedTaskStats.failed > 0 || completedTaskStats.unimported > 0) && (
+                <Badge variant={completedTaskStats.failed > 0 ? "destructive" : "secondary"} className="ml-2">
+                  {completedTaskStats.failed + completedTaskStats.unimported}
+                </Badge>
+              )}
+            </Button>
           </div>
+
+          {emailsSubTab === "pool" ? (
+            <div className="grid gap-6 md:grid-cols-3">
+              {/* Add Emails Card */}
+              <Card className="md:col-span-1">
+                <CardHeader>
+                  <CardTitle>Add Emails</CardTitle>
+                  <CardDescription>Add emails to the pool (one per line)</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <Textarea
+                    placeholder="email1@example.com&#10;email2@example.com&#10;..."
+                    value={newEmails}
+                    onChange={(e) => setNewEmails(e.target.value)}
+                    rows={8}
+                  />
+                  <div className="space-y-2">
+                    <Label>IMAP Provider (Optional)</Label>
+                    <Select value={selectedEmailProvider} onValueChange={setSelectedEmailProvider}>
+                      <SelectTrigger><SelectValue placeholder="Auto-detect" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__auto__">Auto-detect</SelectItem>
+                        <SelectItem value="aycd">AYCD Inbox</SelectItem>
+                        <SelectItem value="gmail">Gmail IMAP</SelectItem>
+                        {imapProviders.filter(p => p.isEnabled).map(p => (
+                          <SelectItem key={p.id} value={p.name}>{p.displayName}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button 
+                    className="w-full" 
+                    onClick={handleAddEmails}
+                    disabled={addingEmails || !newEmails.trim()}
+                  >
+                    {addingEmails ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                    Add Emails
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* Email Pool Card */}
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Email Pool</CardTitle>
+                      <CardDescription>
+                        {emailStats.AVAILABLE} available · {emailStats.IN_USE} in use · {emailStats.USED || 0} used
+                      </CardDescription>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => handleDeleteEmails([], true, "USED")}>
+                        <Trash2 className="mr-2 h-4 w-4" />Clear Used
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-h-[400px] overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Email</TableHead>
+                          <TableHead>IMAP</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Added</TableHead>
+                          <TableHead></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {emails.slice(0, 100).map((email) => (
+                          <TableRow key={email.id}>
+                            <TableCell className="font-mono text-sm">{email.email}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{email.imapProvider || "auto"}</Badge>
+                            </TableCell>
+                            <TableCell>{getStatusBadge(email.status)}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {formatDate(email.createdAt)}
+                            </TableCell>
+                            <TableCell>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteEmails([email.id])}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {emails.length > 100 && (
+                      <p className="text-center text-sm text-muted-foreground py-2">
+                        Showing 100 of {emails.length} emails
+                      </p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Unimported Successful Tasks */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <CheckCircle2 className="h-5 w-5 text-green-600" />
+                        Ready to Import
+                      </CardTitle>
+                      <CardDescription>
+                        {completedTaskStats.unimported} successful accounts not yet imported
+                      </CardDescription>
+                    </div>
+                    <div className="flex gap-2">
+                      {unimportedTasks.length > 0 && (
+                        <>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={selectedCompletedIds.size > 0 ? clearCompletedSelection : selectAllUnimported}
+                          >
+                            {selectedCompletedIds.size > 0 ? "Deselect All" : "Select All"}
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            onClick={() => handleImportCompletedTasks()}
+                            disabled={selectedCompletedIds.size === 0 || importingCompleted}
+                          >
+                            {importingCompleted ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                            Import ({selectedCompletedIds.size})
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-h-[400px] overflow-y-auto">
+                    {unimportedTasks.length === 0 ? (
+                      <p className="text-center text-muted-foreground py-8">No accounts ready to import</p>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-8"></TableHead>
+                            <TableHead>Email</TableHead>
+                            <TableHead>Password</TableHead>
+                            <TableHead>Completed</TableHead>
+                            <TableHead></TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {unimportedTasks.slice(0, 100).map((task) => (
+                            <TableRow key={task.id}>
+                              <TableCell>
+                                <Checkbox
+                                  checked={selectedCompletedIds.has(task.id)}
+                                  onCheckedChange={() => toggleCompletedSelection(task.id)}
+                                />
+                              </TableCell>
+                              <TableCell className="font-mono text-sm">{task.email}</TableCell>
+                              <TableCell className="font-mono text-sm text-muted-foreground">
+                                {task.password ? "••••••••" : "-"}
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {task.completedAt ? formatRelativeTime(task.completedAt) : "-"}
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleImportCompletedTasks([task.id])}
+                                  disabled={importingCompleted}
+                                >
+                                  <Upload className="h-4 w-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Failed Tasks */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <XCircle className="h-5 w-5 text-red-600" />
+                        Failed
+                      </CardTitle>
+                      <CardDescription>
+                        {completedTaskStats.failed} tasks failed
+                      </CardDescription>
+                    </div>
+                    {failedTasks.length > 0 && (
+                      <Button variant="outline" size="sm" onClick={handleClearFailedTasks}>
+                        <Trash2 className="mr-2 h-4 w-4" />Clear All
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-h-[400px] overflow-y-auto">
+                    {failedTasks.length === 0 ? (
+                      <p className="text-center text-muted-foreground py-8">No failed tasks</p>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Email</TableHead>
+                            <TableHead>Error</TableHead>
+                            <TableHead>Retries</TableHead>
+                            <TableHead>When</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {failedTasks.slice(0, 100).map((task) => (
+                            <TableRow key={task.id}>
+                              <TableCell className="font-mono text-sm">{task.email}</TableCell>
+                              <TableCell className="text-sm text-red-600 max-w-[200px] truncate" title={task.errorMessage || task.lastError || "-"}>
+                                {task.errorMessage || task.lastError || "-"}
+                              </TableCell>
+                              <TableCell className="text-sm">{task.retryCount || 0}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {task.completedAt ? formatRelativeTime(task.completedAt) : "-"}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </TabsContent>
 
         {/* PROXIES TAB */}
@@ -1872,22 +2154,22 @@ export default function GeneratorPage() {
                                 )}
 
                                 {/* Failed Tasks Section */}
-                                {failedTasks.length > 0 && (
+                                {expandedFailedTasks.length > 0 && (
                                   <div className="border rounded-lg p-4 bg-red-50/50">
                                     <div className="flex items-center justify-between mb-3">
                                       <div className="flex items-center gap-2">
                                         <XCircle className="h-5 w-5 text-red-600" />
                                         <span className="font-medium text-red-800">
-                                          Failed Tasks ({failedTasks.length})
+                                          Failed Tasks ({expandedFailedTasks.length})
                                         </span>
                                       </div>
                                       <div className="flex items-center gap-2">
                                         <Checkbox
                                           id="select-all-failed"
-                                          checked={failedTasks.every(t => selectedTaskIds.has(t.id))}
+                                          checked={expandedFailedTasks.every(t => selectedTaskIds.has(t.id))}
                                           onCheckedChange={(checked) => {
                                             const newSelected = new Set(selectedTaskIds);
-                                            failedTasks.forEach(t => {
+                                            expandedFailedTasks.forEach(t => {
                                               if (checked) newSelected.add(t.id);
                                               else newSelected.delete(t.id);
                                             });
@@ -1899,7 +2181,7 @@ export default function GeneratorPage() {
                                           size="sm"
                                           variant="outline"
                                           onClick={() => {
-                                            const selected = failedTasks.filter(t => selectedTaskIds.has(t.id));
+                                            const selected = expandedFailedTasks.filter(t => selectedTaskIds.has(t.id));
                                             if (selected.length > 0) {
                                               handleRetryTasks(job.id, selected.map(t => t.id));
                                             } else {
@@ -1909,9 +2191,9 @@ export default function GeneratorPage() {
                                           disabled={retrying}
                                         >
                                           {retrying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
-                                          Retry {failedTasks.filter(t => selectedTaskIds.has(t.id)).length > 0 
-                                            ? `Selected (${failedTasks.filter(t => selectedTaskIds.has(t.id)).length})`
-                                            : `All (${failedTasks.length})`}
+                                          Retry {expandedFailedTasks.filter(t => selectedTaskIds.has(t.id)).length > 0 
+                                            ? `Selected (${expandedFailedTasks.filter(t => selectedTaskIds.has(t.id)).length})`
+                                            : `All (${expandedFailedTasks.length})`}
                                         </Button>
                                       </div>
                                     </div>
@@ -1926,7 +2208,7 @@ export default function GeneratorPage() {
                                         </TableRow>
                                       </TableHeader>
                                       <TableBody>
-                                        {failedTasks.map((task) => (
+                                        {expandedFailedTasks.map((task) => (
                                           <TableRow key={task.id}>
                                             <TableCell>
                                               <Checkbox
