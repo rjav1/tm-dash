@@ -52,12 +52,19 @@ export async function POST(
     }
 
     // Get auto-link config
-    const [autoLinkConfig, amexOnlyConfig] = await Promise.all([
+    const [autoLinkConfig, allowedCardTagsConfig] = await Promise.all([
       prisma.checkoutConfig.findUnique({ where: { key: "auto_link_cards" } }),
-      prisma.checkoutConfig.findUnique({ where: { key: "amex_only" } }),
+      prisma.checkoutConfig.findUnique({ where: { key: "allowed_card_tags" } }),
     ]);
     const autoLinkCards = autoLinkConfig?.value !== "false";
-    const amexOnly = amexOnlyConfig?.value === "true";
+    
+    // Parse allowed_card_tags - empty array means all cards allowed
+    let allowedTags: string[] = [];
+    try {
+      allowedTags = allowedCardTagsConfig?.value ? JSON.parse(allowedCardTagsConfig.value) : [];
+    } catch {
+      allowedTags = [];
+    }
 
     if (!autoLinkCards) {
       return NextResponse.json(
@@ -66,15 +73,15 @@ export async function POST(
       );
     }
 
-    // Build card filter based on amex_only setting
+    // Build card filter based on allowed_card_tags setting
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const baseCardFilter: any = {
       deletedAt: null,
       checkoutStatus: "AVAILABLE",
     };
-    if (amexOnly) {
+    if (allowedTags.length > 0) {
       baseCardFilter.tags = {
-        some: { name: { equals: "amex", mode: "insensitive" } },
+        some: { name: { in: allowedTags, mode: "insensitive" } },
       };
     }
 

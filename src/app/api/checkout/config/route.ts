@@ -16,7 +16,7 @@ const CONFIG_KEYS = [
   // Worker settings
   "max_retries",
   "auto_link_cards", // boolean
-  "amex_only", // boolean - only use cards tagged as "amex"
+  "allowed_card_tags", // JSON array of tag names to allow (empty = all cards allowed)
   "worker_parallelism", // number of parallel workers
   
   // Discord webhooks for notifications
@@ -40,7 +40,14 @@ type ConfigKey = (typeof CONFIG_KEYS)[number];
  */
 export async function GET() {
   try {
-    const configs = await prisma.checkoutConfig.findMany();
+    // Fetch config and available card tags in parallel
+    const [configs, cardTags] = await Promise.all([
+      prisma.checkoutConfig.findMany(),
+      prisma.cardTag.findMany({ 
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, color: true }
+      }),
+    ]);
 
     // Build a config object
     const configMap: Record<string, string | number | boolean | object> = {};
@@ -68,7 +75,7 @@ export async function GET() {
       // Worker defaults
       max_retries: 3,
       auto_link_cards: true,
-      amex_only: false,
+      allowed_card_tags: [], // Empty = all cards allowed
       worker_parallelism: 1,
       
       // Webhook defaults
@@ -87,7 +94,7 @@ export async function GET() {
       ...configMap,
     };
 
-    return NextResponse.json({ config: result });
+    return NextResponse.json({ config: result, cardTags });
   } catch (error) {
     console.error("Error fetching checkout config:", error);
     return NextResponse.json(

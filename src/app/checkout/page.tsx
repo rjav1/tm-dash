@@ -200,6 +200,12 @@ interface CheckoutStats {
   }>;
 }
 
+interface CardTag {
+  id: string;
+  name: string;
+  color: string | null;
+}
+
 interface CheckoutConfig {
   discord_token?: string;
   discord_watch_channel_ids?: string[];
@@ -209,7 +215,7 @@ interface CheckoutConfig {
   success_timeout?: number;
   max_retries?: number;
   auto_link_cards?: boolean;
-  amex_only?: boolean;
+  allowed_card_tags?: string[]; // Array of tag names to allow (empty = all cards allowed)
   worker_parallelism?: number;
   discord_webhook_success?: string;
   discord_webhook_error?: string;
@@ -293,6 +299,7 @@ export default function CheckoutPage() {
   const [runs, setRuns] = useState<CheckoutRun[]>([]);
   const [stats, setStats] = useState<CheckoutStats | null>(null);
   const [config, setConfig] = useState<CheckoutConfig>({});
+  const [cardTags, setCardTags] = useState<CardTag[]>([]); // Available card tags for filtering
   const [loading, setLoading] = useState(true);
   
   // UI state
@@ -385,6 +392,7 @@ export default function CheckoutPage() {
       if (!res.ok) throw new Error("Failed to fetch config");
       const data = await res.json();
       setConfig(data.config || {});
+      setCardTags(data.cardTags || []);
     } catch (error) {
       console.error("Error fetching config:", error);
     }
@@ -2061,15 +2069,46 @@ export default function CheckoutPage() {
                     onCheckedChange={(checked) => updateConfig({ auto_link_cards: checked })}
                   />
                 </div>
-                <div className="flex items-center justify-between">
+                <div className="space-y-2">
                   <div className="space-y-0.5">
-                    <Label>Amex Only</Label>
-                    <p className="text-xs text-muted-foreground">Only use cards tagged as &quot;amex&quot; for checkouts</p>
+                    <Label>Allowed Card Tags</Label>
+                    <p className="text-xs text-muted-foreground">
+                      {(config.allowed_card_tags?.length || 0) === 0 
+                        ? "All cards allowed (no filter)" 
+                        : `Only cards with selected tags: ${config.allowed_card_tags?.join(", ")}`}
+                    </p>
                   </div>
-                  <Switch
-                    checked={config.amex_only === true}
-                    onCheckedChange={(checked) => updateConfig({ amex_only: checked })}
-                  />
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    {cardTags.length === 0 ? (
+                      <p className="text-xs text-muted-foreground italic">No card tags found. Create tags in the Cards page.</p>
+                    ) : (
+                      cardTags.map((tag) => {
+                        const isSelected = config.allowed_card_tags?.includes(tag.name) || false;
+                        return (
+                          <div key={tag.id} className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`tag-${tag.id}`}
+                              checked={isSelected}
+                              onCheckedChange={(checked) => {
+                                const currentTags = config.allowed_card_tags || [];
+                                const newTags = checked
+                                  ? [...currentTags, tag.name]
+                                  : currentTags.filter((t) => t !== tag.name);
+                                updateConfig({ allowed_card_tags: newTags });
+                              }}
+                            />
+                            <Label 
+                              htmlFor={`tag-${tag.id}`} 
+                              className="text-sm font-normal cursor-pointer"
+                              style={tag.color ? { color: tag.color } : undefined}
+                            >
+                              {tag.name}
+                            </Label>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
