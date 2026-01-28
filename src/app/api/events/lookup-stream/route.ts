@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { ScrapeJobStatus, ScrapeJobType } from "@prisma/client";
+import { convertEventDateToVenueTimezone } from "@/lib/timezone-utils";
 
 // Constants
 const SCRAPE_TIMEOUT_MS = 60000; // 60 seconds max (increased for proxy retries)
@@ -271,6 +272,30 @@ export async function POST(request: NextRequest) {
                 data: job.outputData ? JSON.parse(job.outputData) : null,
               };
               scrapedData = tmResult.data;
+              
+              // Convert date/time to venue's local timezone if we have venue state info
+              if (scrapedData) {
+                const data = scrapedData as Record<string, unknown>;
+                const venueState = data.venueState as string | null;
+                const rawStartDate = data.rawStartDate as string | null; // UTC ISO date from TM
+                
+                if (rawStartDate && venueState) {
+                  // Convert UTC date to venue's local timezone
+                  const converted = convertEventDateToVenueTimezone(rawStartDate, venueState);
+                  console.log(`[Lookup Stream] Converting date from UTC ${rawStartDate} to ${venueState}: ${converted.date} at ${converted.time}`);
+                  data.date = converted.date;
+                  data.time = converted.time;
+                  data.dayOfWeek = converted.dayOfWeek;
+                } else if (data.date && typeof data.date === "string" && data.date.includes("T") && venueState) {
+                  // If date looks like an ISO string, convert it
+                  const converted = convertEventDateToVenueTimezone(data.date as string, venueState);
+                  console.log(`[Lookup Stream] Converting ISO date ${data.date} to ${venueState}: ${converted.date} at ${converted.time}`);
+                  data.date = converted.date;
+                  data.time = converted.time;
+                  data.dayOfWeek = converted.dayOfWeek;
+                }
+              }
+              
               sendEvent({ type: "progress", step: "tm_complete", percent: 60, message: "Ticketmaster data retrieved!" });
               console.log(`[Lookup Stream] TM job ${tmJobId} succeeded`);
               break;
