@@ -12,16 +12,16 @@
  * =============================================================================
  *
  * Realized Profit (from completed sales):
- *   Calculated from INVOICES, not individual sales.
- *   Profit = Sum(invoice.totalAmount) - Sum(invoice.totalCost)
+ *   - Revenue: Sum(invoice.totalAmount) = NET payout after TicketVault fees
+ *   - Cost: Derived from our own Purchase records (NOT from TicketVault)
+ *     - Links via: Sale -> Listing -> Purchase, OR
+ *     - Direct match: Sale.extPONumber -> Purchase.dashboardPoNumber
+ *   - Profit = Revenue - Cost
  *
- *   - invoice.totalAmount = NET payout (after TicketVault fees)
- *   - invoice.totalCost = Our purchase cost
- *
- * Why we use invoices instead of sales:
- *   1. One invoice can have multiple sales (buyer purchased from multiple listings)
- *   2. invoice.totalAmount is the actual net payout - no fee estimation needed
- *   3. Matches exactly what TicketVault shows when summing invoices
+ * Why we derive cost ourselves:
+ *   1. TicketVault's invoice.totalCost may not always match our records
+ *   2. We have accurate cost data in our Purchase records
+ *   3. Consistent calculation across dashboard and sales page
  *
  * Unrealized Profit (from unsold inventory):
  *   Estimated from listings that haven't sold yet.
@@ -195,21 +195,75 @@ export async function GET() {
     // ===============================
     // PROFIT CALCULATIONS
     // ===============================
-    // Calculate profit directly from INVOICES - this matches TicketVault exactly
-    // Invoice has:
-    //   - totalAmount: Net payout (after TicketVault fees) 
-    //   - totalCost: Our purchase cost
-    // Profit = Sum(totalAmount) - Sum(totalCost)
-    const invoiceAggregates = await prisma.invoice.aggregate({
-      where: { isCancelled: false },
-      _sum: {
-        totalAmount: true, // Net payout after fees
-        totalCost: true,   // Our purchase cost
-      },
-    });
+    // Revenue from invoices (net payout after TicketVault fees)
+    // Cost derived from our own Purchase records (NOT from TicketVault invoice.totalCost)
+    const [invoiceAggregates, allSales] = await Promise.all([
+      prisma.invoice.aggregate({
+        where: { isCancelled: false },
+        _sum: {
+          totalAmount: true, // Net payout after fees - this is our revenue
+        },
+      }),
+      // Get all sales with their linked purchases AND extPONumber for direct matching
+      prisma.sale.findMany({
+        select: {
+          quantity: true,
+          extPONumber: true,
+          listing: {
+            select: {
+              purchase: {
+                select: {
+                  totalPrice: true,
+                  quantity: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
 
     const realizedRevenue = Number(invoiceAggregates._sum.totalAmount || 0);
-    const realizedCost = Number(invoiceAggregates._sum.totalCost || 0);
+    
+    // Calculate cost from our own Purchase records
+    // Priority: 1) Sale -> Listing -> Purchase, 2) Sale.extPONumber -> Purchase.dashboardPoNumber
+    let realizedCost = 0;
+    const salesNeedingDirectLookup: { extPONumber: string; quantity: number }[] = [];
+    
+    for (const sale of allSales) {
+      const purchase = sale.listing?.purchase;
+      if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
+        const costPerTicket = Number(purchase.totalPrice) / purchase.quantity;
+        realizedCost += costPerTicket * sale.quantity;
+      } else if (sale.extPONumber) {
+        salesNeedingDirectLookup.push({ 
+          extPONumber: sale.extPONumber, 
+          quantity: sale.quantity 
+        });
+      }
+    }
+    
+    // Batch lookup purchases by dashboardPoNumber for sales without listing links
+    if (salesNeedingDirectLookup.length > 0) {
+      const poNumbers = [...new Set(salesNeedingDirectLookup.map(s => s.extPONumber))];
+      const directPurchases = await prisma.purchase.findMany({
+        where: { dashboardPoNumber: { in: poNumbers } },
+        select: { dashboardPoNumber: true, totalPrice: true, quantity: true },
+      });
+      
+      const purchaseByPO = new Map(
+        directPurchases.map(p => [p.dashboardPoNumber, p])
+      );
+      
+      for (const sale of salesNeedingDirectLookup) {
+        const purchase = purchaseByPO.get(sale.extPONumber);
+        if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
+          const costPerTicket = Number(purchase.totalPrice) / purchase.quantity;
+          realizedCost += costPerTicket * sale.quantity;
+        }
+      }
+    }
+    
     const realizedProfit = realizedRevenue - realizedCost;
 
     // Unrealized profit: estimated from unsold listings
