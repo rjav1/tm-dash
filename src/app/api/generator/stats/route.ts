@@ -173,6 +173,27 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Auto-cleanup: Reset orphaned RUNNING tasks back to PENDING
+    // Tasks stuck in RUNNING for more than 10 minutes without completion are orphaned
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const orphanedTasks = await prisma.generatorTask.updateMany({
+      where: {
+        status: "RUNNING",
+        startedAt: { lt: tenMinutesAgo },
+      },
+      data: {
+        status: "PENDING",
+        workerName: null,
+        startedAt: null,
+        currentStep: null,
+        stepDetail: "Reset - worker timeout",
+        stepProgress: 0,
+      },
+    });
+    if (orphanedTasks.count > 0) {
+      console.log(`[Generator Stats] Reset ${orphanedTasks.count} orphaned RUNNING tasks to PENDING`);
+    }
+
     // Get individual workers from generator_workers table
     // Only get workers that are not STOPPED and have heartbeat within last 60 seconds
     const individualWorkers = await prisma.generatorWorker.findMany({
