@@ -5,7 +5,12 @@
  * Works on Vercel serverless functions.
  * 
  * Scrapes event details directly from ticketmaster.com/event/{eventId}
+ * 
+ * Note: Dates are automatically converted to the venue's local timezone
+ * based on the venue's state/province code.
  */
+
+import { convertEventDateToVenueTimezone, normalizeTimezone } from "@/lib/timezone-utils";
 
 export interface ScrapedEventData {
   eventName: string | null;
@@ -153,7 +158,7 @@ function parseEventHtml(html: string, url: string): ScrapedEventData {
           }
         }
         
-        // Get venue
+        // Get venue FIRST (needed for timezone conversion)
         if (data.location) {
           result.venue = data.location.name || null;
           if (data.location.address) {
@@ -162,22 +167,62 @@ function parseEventHtml(html: string, url: string): ScrapedEventData {
           }
         }
         
-        // Get date/time
+        // Get date/time - convert to venue's local timezone
         if (data.startDate) {
           try {
-            const dateObj = new Date(data.startDate);
-            result.date = dateObj.toLocaleDateString("en-US", {
-              month: "long",
-              day: "numeric",
-              year: "numeric",
-            });
-            result.time = dateObj.toLocaleTimeString("en-US", {
-              hour: "numeric",
-              minute: "2-digit",
-            });
-            result.dayOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dateObj.getDay()];
+            // Check if Ticketmaster provided a timezone in the event data
+            const tmTimezone = normalizeTimezone(data.timezone || data.dates?.timezone);
+            
+            if (tmTimezone) {
+              // Use the timezone from Ticketmaster API directly
+              const dateObj = new Date(data.startDate);
+              const dateFormatter = new Intl.DateTimeFormat("en-US", {
+                timeZone: tmTimezone,
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              });
+              const timeFormatter = new Intl.DateTimeFormat("en-US", {
+                timeZone: tmTimezone,
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+              });
+              const dayFormatter = new Intl.DateTimeFormat("en-US", {
+                timeZone: tmTimezone,
+                weekday: "short",
+              });
+              
+              result.date = dateFormatter.format(dateObj);
+              result.time = timeFormatter.format(dateObj);
+              result.dayOfWeek = dayFormatter.format(dateObj);
+              
+              console.log(`[TM Fetch Scraper] Converted date using TM timezone (${tmTimezone}): ${result.date} at ${result.time}`);
+            } else {
+              // Fall back to inferring timezone from venue state
+              const converted = convertEventDateToVenueTimezone(data.startDate, result.venueState);
+              result.date = converted.date;
+              result.time = converted.time;
+              result.dayOfWeek = converted.dayOfWeek;
+            }
           } catch (e) {
-            // Date parsing failed
+            // Date parsing failed - fall back to basic parsing
+            console.error("[TM Fetch Scraper] Date parsing error:", e);
+            try {
+              const dateObj = new Date(data.startDate);
+              result.date = dateObj.toLocaleDateString("en-US", {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              });
+              result.time = dateObj.toLocaleTimeString("en-US", {
+                hour: "numeric",
+                minute: "2-digit",
+              });
+              result.dayOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dateObj.getDay()];
+            } catch {
+              // Complete failure, leave as null
+            }
           }
         }
       }
