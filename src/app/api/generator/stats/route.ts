@@ -122,17 +122,18 @@ export async function GET(request: NextRequest) {
     });
 
     // Get active runs and workers (runs in RUNNING status)
-    // Workers send heartbeat every 10s, so we check for heartbeat within last 30s
+    // Timeouts are generous to allow for temporary network issues
     const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
-    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
     
-    // Auto-abort runs that have been stale for more than 2 minutes (no heartbeat)
+    // Auto-abort runs that have been stale for more than 10 minutes (no heartbeat)
     // This cleans up orphaned runs from crashed daemons
     // Runs without recent heartbeat are considered stale
     await prisma.generatorRun.updateMany({
       where: {
         status: "RUNNING",
-        lastHeartbeat: { lt: twoMinutesAgo },
+        lastHeartbeat: { lt: tenMinutesAgo },
       },
       data: {
         status: "ABORTED",
@@ -156,11 +157,11 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Auto-cleanup: Mark stale workers as STOPPED (no heartbeat in 30s)
+    // Auto-cleanup: Mark stale workers as STOPPED (no heartbeat in 3 minutes)
     await prisma.generatorWorker.updateMany({
       where: {
         status: { not: "STOPPED" },
-        lastHeartbeat: { lt: thirtySecondsAgo },
+        lastHeartbeat: { lt: threeMinutesAgo },
       },
       data: {
         status: "STOPPED",
@@ -173,12 +174,12 @@ export async function GET(request: NextRequest) {
     });
 
     // Auto-cleanup: Reset orphaned RUNNING tasks back to PENDING
-    // Tasks stuck in RUNNING for more than 3 minutes without completion are orphaned
-    const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
+    // Tasks stuck in RUNNING for more than 15 minutes without completion are orphaned
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
     const orphanedTasks = await prisma.generatorTask.updateMany({
       where: {
         status: "RUNNING",
-        startedAt: { lt: threeMinutesAgo },
+        startedAt: { lt: fifteenMinutesAgo },
       },
       data: {
         status: "PENDING",
@@ -194,11 +195,11 @@ export async function GET(request: NextRequest) {
     }
 
     // Get individual workers from generator_workers table
-    // Only get workers that are not STOPPED and have heartbeat within last 30 seconds
+    // Only get workers that are not STOPPED and have heartbeat within last 3 minutes
     const individualWorkers = await prisma.generatorWorker.findMany({
       where: {
         status: { not: "STOPPED" },
-        lastHeartbeat: { gte: thirtySecondsAgo },
+        lastHeartbeat: { gte: threeMinutesAgo },
       },
       select: {
         id: true,
