@@ -454,7 +454,7 @@ export default function GeneratorPage() {
 
   const fetchTags = useCallback(async () => {
     try {
-      const response = await fetch("/api/tags");
+      const response = await fetch("/api/tags?type=account");
       if (!response.ok) throw new Error("Failed to fetch tags");
       const data = await response.json();
       setTags(data.tags || []);
@@ -694,7 +694,7 @@ export default function GeneratorPage() {
       const response = await fetch("/api/tags", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newTagName.trim(), color: newTagColor }),
+        body: JSON.stringify({ type: "account", name: newTagName.trim(), color: newTagColor }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
