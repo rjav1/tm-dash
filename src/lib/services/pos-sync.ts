@@ -296,14 +296,24 @@ export async function findMatchingPosEvent(
       const venueFirstWord = searchVenue.split(/\s+/)[0] || "";
       console.log(`[POS Sync] No events found, trying with venue first word: "${venueFirstWord}"`);
       
-      const retryEvents = await TicketVaultApi.searchEvents(
+      let retryEvents = await TicketVaultApi.searchEvents(
         searchName,
         eventDate,
         venueFirstWord
       );
       
+      // If still no results, try with empty venue (search by name and date only)
+      if (retryEvents.length === 0 && venueFirstWord) {
+        console.log(`[POS Sync] No events found, trying without venue filter...`);
+        retryEvents = await TicketVaultApi.searchEvents(
+          searchName,
+          eventDate,
+          ""
+        );
+      }
+      
       if (retryEvents.length === 0) {
-        console.warn(`[POS Sync] No events found for "${searchName}" at "${searchVenue}" or "${venueFirstWord}"`);
+        console.warn(`[POS Sync] No events found for "${searchName}" at "${searchVenue}" on ${eventDate.toISOString().split('T')[0]}`);
         return null;
       }
       
@@ -430,31 +440,39 @@ export async function syncPurchaseToPOS(
     const rawDate = purchase.event.eventDateRaw;
     const dateOnly = rawDate.split(" at ")[0]; // "October 7, 2026"
     
-    // Try parsing with Date constructor
-    let parsed = new Date(dateOnly);
+    // Always use manual parsing to ensure UTC and avoid timezone issues
+    const months: Record<string, number> = {
+      january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+      july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
+    };
     
-    // If that doesn't work, try manual parsing for "Month Day, Year" format
-    if (isNaN(parsed.getTime())) {
-      const months: Record<string, number> = {
-        january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-        july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
-      };
-      // Match "October 7, 2026" or "October 07, 2026"
-      const match = dateOnly.match(/^(\w+)\s+(\d{1,2}),?\s+(\d{4})$/i);
-      if (match) {
-        const monthName = match[1].toLowerCase();
-        const day = parseInt(match[2], 10);
-        const year = parseInt(match[3], 10);
-        const month = months[monthName];
-        if (month !== undefined) {
-          // Create date at noon UTC to avoid timezone issues
-          parsed = new Date(Date.UTC(year, month, day, 12, 0, 0));
-        }
+    // Match "October 7, 2026", "October 07, 2026", "Oct 7, 2026", etc.
+    const match = dateOnly.match(/^(\w+)\s+(\d{1,2}),?\s+(\d{4})$/i);
+    if (match) {
+      const monthName = match[1].toLowerCase();
+      const day = parseInt(match[2], 10);
+      const year = parseInt(match[3], 10);
+      const month = months[monthName];
+      if (month !== undefined) {
+        // Create date at noon UTC to avoid timezone shifting
+        eventDateForSearch = new Date(Date.UTC(year, month, day, 12, 0, 0));
+        console.log(`[POS Sync] Parsed date "${dateOnly}" -> ${eventDateForSearch.toISOString()}`);
       }
     }
     
-    if (!isNaN(parsed.getTime())) {
-      eventDateForSearch = parsed;
+    // Fallback to Date constructor if manual parsing failed
+    if (!eventDateForSearch) {
+      const parsed = new Date(dateOnly);
+      if (!isNaN(parsed.getTime())) {
+        // Convert to UTC noon to avoid timezone issues
+        eventDateForSearch = new Date(Date.UTC(
+          parsed.getFullYear(),
+          parsed.getMonth(),
+          parsed.getDate(),
+          12, 0, 0
+        ));
+        console.log(`[POS Sync] Fallback parsed date "${dateOnly}" -> ${eventDateForSearch.toISOString()}`);
+      }
     }
   }
   
