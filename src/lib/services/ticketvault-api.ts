@@ -463,6 +463,9 @@ export async function ensureAuthenticated(): Promise<void> {
 
 /**
  * Search for events by name, date, and venue in TicketVault POS
+ * 
+ * Searches within a +/- 1 day window to account for timezone issues
+ * where dates might be off by a day due to UTC conversion.
  */
 export async function searchTicketVaultEvents(
   eventName: string,
@@ -471,12 +474,22 @@ export async function searchTicketVaultEvents(
 ): Promise<TicketVaultEvent[]> {
   await ensureAuthenticated();
 
-  const dateStr = formatDateForApi(eventDate);
+  // Create a date range of +/- 1 day to account for timezone issues
+  // This handles cases where the stored date might be off by a day
+  const startDate = new Date(eventDate);
+  startDate.setUTCDate(startDate.getUTCDate() - 1);
+  
+  const endDate = new Date(eventDate);
+  endDate.setUTCDate(endDate.getUTCDate() + 1);
+
+  const startDateStr = formatDateForApi(startDate);
+  const endDateStr = formatDateForApi(endDate);
+  const targetDateStr = formatDateForApi(eventDate);
 
   const params = new URLSearchParams({
     EventName: eventName,
-    StartDate: dateStr,
-    EndDate: dateStr,
+    StartDate: startDateStr,
+    EndDate: endDateStr,
     VenueName: venueName,
     ParkingPasses: "false",
     RegularEvents: "true",
@@ -504,7 +517,7 @@ export async function searchTicketVaultEvents(
 
   const events: TicketVaultEvent[] = await response.json();
   console.log(
-    `[TicketVault] Found ${events.length} events for "${eventName}" at "${venueName}" on ${dateStr}`
+    `[TicketVault] Found ${events.length} events for "${eventName}" at "${venueName}" (searching ${startDateStr} to ${endDateStr}, target: ${targetDateStr})`
   );
 
   return events;
