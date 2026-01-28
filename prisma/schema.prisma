@@ -270,6 +270,7 @@ model Event {
 
   // Relations
   queuePositions QueuePosition[]
+  queueBatches   QueueBatch[]     // Multiple queue batches per event (pre-sale, public sale, etc.)
   purchases      Purchase[]
   tickets        Ticket[]
   listings       Listing[]
@@ -354,10 +355,34 @@ model VenueSectionZone {
   @@map("venue_section_zones")
 }
 
+// ========================================
+// Queue Batches - Groups of queue data per event
+// Allows multiple queue runs (pre-sale, public sale) per event
+// ========================================
+
+model QueueBatch {
+  id          String   @id @default(cuid())
+  eventId     String   @map("event_id")
+  tag         String   // e.g., "Pre-Sale", "Public Sale", "VIP"
+  source      String?  // Original filename
+  importedAt  DateTime @default(now()) @map("imported_at")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // Relations
+  event       Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  positions   QueuePosition[]
+  
+  @@unique([eventId, tag])
+  @@index([eventId])
+  @@map("queue_batches")
+}
+
 model QueuePosition {
   id        String   @id @default(cuid())
   accountId String   @map("account_id")
   eventId   String   @map("event_id")
+  batchId   String?  @map("batch_id")  // Reference to QueueBatch (nullable for migration)
   position  Int      // Queue position number
   testedAt  DateTime @default(now()) @map("tested_at")
   source    String?  // Which encore run, batch identifier, etc.
@@ -373,13 +398,16 @@ model QueuePosition {
   excludedReason String?   @map("excluded_reason") // Why it was excluded (e.g., "late entry", "outlier")
 
   // Relations
-  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  account Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  event   Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  batch   QueueBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
-  // Unique constraint for deduplication - one position per account per event
+  // Legacy unique constraint kept for backwards compatibility during migration
+  // Will be replaced with [accountId, batchId] after data migration
   @@unique([accountId, eventId])
   @@index([accountId])
   @@index([eventId])
+  @@index([batchId])
   @@index([testedAt])
   @@index([excluded])
   @@map("queue_positions")
