@@ -148,7 +148,7 @@ export async function POST(request: NextRequest) {
       
       logs.push(`\nResults with full venue "${searchVenue}": ${events.length} events`);
       for (const e of events) {
-        logs.push(`  - ${e.PrimaryEvent} | ${e.EventDateTime} | ${e.Venue} | ID: ${e.ProductionID}`);
+        logs.push(`  - ${e.PrimaryEvent} | ${e.EventDate} | ${e.Venue} | ID: ${e.Id}`);
       }
       
       if (events.length === 0) {
@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
         
         logs.push(`Results with "${venueFirstWord}": ${retryEvents.length} events`);
         for (const e of retryEvents) {
-          logs.push(`  - ${e.PrimaryEvent} | ${e.EventDateTime} | ${e.Venue} | ID: ${e.ProductionID}`);
+          logs.push(`  - ${e.PrimaryEvent} | ${e.EventDate} | ${e.Venue} | ID: ${e.Id}`);
         }
         
         if (retryEvents.length === 0) {
@@ -176,7 +176,7 @@ export async function POST(request: NextRequest) {
           
           logs.push(`Results with empty venue: ${emptyVenueEvents.length} events`);
           for (const e of emptyVenueEvents) {
-            logs.push(`  - ${e.PrimaryEvent} | ${e.EventDateTime} | ${e.Venue} | ID: ${e.ProductionID}`);
+            logs.push(`  - ${e.PrimaryEvent} | ${e.EventDate} | ${e.Venue} | ID: ${e.Id}`);
           }
         }
       }
