@@ -27,7 +27,6 @@ export async function GET(request: NextRequest) {
           job: {
             select: {
               id: true,
-              name: true,
             },
           },
         },
@@ -52,7 +51,6 @@ export async function GET(request: NextRequest) {
           job: {
             select: {
               id: true,
-              name: true,
             },
           },
         },
@@ -141,13 +139,19 @@ export async function POST(request: NextRequest) {
           data: {
             email: task.email,
             password: task.password || "",
-            phone: task.phoneNumber,
-            firstName: task.firstName,
-            lastName: task.lastName,
-            zipCode: task.postalCode,
+            phoneNumber: task.phoneNumber,
             status: "ACTIVE",
-            tagId: tagId || null,
             generatorJobId: task.jobId,
+            generatorTaskId: task.id,
+            generatedAt: task.completedAt || new Date(),
+            // Connect tag if provided
+            ...(tagId ? { tags: { connect: { id: tagId } } } : {}),
+            // Store additional info in notes
+            notes: [
+              task.firstName && `First: ${task.firstName}`,
+              task.lastName && `Last: ${task.lastName}`,
+              task.postalCode && `Zip: ${task.postalCode}`,
+            ].filter(Boolean).join(", ") || null,
           },
         });
 

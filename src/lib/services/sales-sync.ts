@@ -580,7 +580,7 @@ export async function syncAllFromPos(): Promise<{
  * - Profit = Total Revenue - Total Cost (derived)
  */
 export async function getSalesStats(): Promise<SalesStats> {
-  const [totalSales, pendingSales, completedSales, salesWithPurchases, invoiceAggregates] =
+  const [totalSales, pendingSales, completedSales, allSales, invoiceAggregates] =
     await Promise.all([
       prisma.sale.count(),
       // Pending = Status 40 (Alert) + Status 20 (Pending) - not delivered yet
@@ -601,11 +601,12 @@ export async function getSalesStats(): Promise<SalesStats> {
           ],
         } 
       }),
-      // Get sales with their linked purchases for cost calculation
+      // Get all sales with their linked purchases AND extPONumber for direct matching
       prisma.sale.findMany({
         select: {
           saleDate: true,
           quantity: true,
+          extPONumber: true, // For direct purchase matching
           listing: {
             select: {
               purchase: {
@@ -631,23 +632,56 @@ export async function getSalesStats(): Promise<SalesStats> {
   const totalRevenue = Number(invoiceAggregates._sum.totalAmount || 0);
   
   // Calculate total cost from our own Purchase records
-  // Cost = sum of (purchase.totalPrice / purchase.quantity * sale.quantity) for each sale
+  // Priority: 1) Sale -> Listing -> Purchase, 2) Sale.extPONumber -> Purchase.dashboardPoNumber
   let totalCost = 0;
   const uniqueDays = new Set<string>();
   
-  for (const sale of salesWithPurchases) {
+  // Collect extPONumbers that need direct lookup (no listing purchase link)
+  const salesNeedingDirectLookup: { extPONumber: string; quantity: number }[] = [];
+  
+  for (const sale of allSales) {
     // Track unique sale dates
     if (sale.saleDate) {
       const dateStr = new Date(sale.saleDate).toISOString().split('T')[0];
       uniqueDays.add(dateStr);
     }
     
-    // Calculate cost from linked purchase
+    // Try to get cost from linked purchase (via listing)
     const purchase = sale.listing?.purchase;
     if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
       const costPerTicket = Number(purchase.totalPrice) / purchase.quantity;
       const saleCost = costPerTicket * sale.quantity;
       totalCost += saleCost;
+    } else if (sale.extPONumber) {
+      // No linked purchase - queue for direct lookup via extPONumber
+      salesNeedingDirectLookup.push({ 
+        extPONumber: sale.extPONumber, 
+        quantity: sale.quantity 
+      });
+    }
+  }
+  
+  // Batch lookup purchases by dashboardPoNumber for sales without listing links
+  if (salesNeedingDirectLookup.length > 0) {
+    const poNumbers = [...new Set(salesNeedingDirectLookup.map(s => s.extPONumber))];
+    const directPurchases = await prisma.purchase.findMany({
+      where: { dashboardPoNumber: { in: poNumbers } },
+      select: { dashboardPoNumber: true, totalPrice: true, quantity: true },
+    });
+    
+    // Create lookup map
+    const purchaseByPO = new Map(
+      directPurchases.map(p => [p.dashboardPoNumber, p])
+    );
+    
+    // Calculate cost for sales matched directly to purchases
+    for (const sale of salesNeedingDirectLookup) {
+      const purchase = purchaseByPO.get(sale.extPONumber);
+      if (purchase && purchase.totalPrice && purchase.quantity && purchase.quantity > 0) {
+        const costPerTicket = Number(purchase.totalPrice) / purchase.quantity;
+        const saleCost = costPerTicket * sale.quantity;
+        totalCost += saleCost;
+      }
     }
   }
   
