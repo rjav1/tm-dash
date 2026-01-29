@@ -122,8 +122,8 @@ export async function GET(request: NextRequest) {
     });
 
     // Get active runs and workers (runs in RUNNING status)
-    // Timeouts are generous to allow for temporary network issues
-    const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
+    // Timeouts are generous to allow for temporary network issues and long tasks
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);  // For UI stale indicator
     const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
     const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
     
@@ -317,7 +317,7 @@ export async function GET(request: NextRequest) {
         targetWorkerCount,
         isPaused,
         runs: activeRuns.map((run) => {
-          const isStale = !run.lastHeartbeat || run.lastHeartbeat < thirtySecondsAgo;
+          const isStale = !run.lastHeartbeat || run.lastHeartbeat < twoMinutesAgo;
           
           return {
             id: run.id,
@@ -335,7 +335,7 @@ export async function GET(request: NextRequest) {
         }),
         // Individual worker threads with detailed status
         threads: individualWorkers.map((worker) => {
-          const isStale = worker.lastHeartbeat < thirtySecondsAgo;
+          const isStale = worker.lastHeartbeat < twoMinutesAgo;
           const currentTask = runningTasks.find(t => t.id === worker.currentTaskId);
           return {
             id: worker.id,
