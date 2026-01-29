@@ -131,23 +131,34 @@ export async function POST(request: NextRequest) {
       }
 
       case "pause": {
-        // Set paused flag in config
+        // Set paused flag in config - daemon will check this before picking up new tasks
         await prisma.generatorConfig.upsert({
           where: { key: "paused" },
           update: { value: "true" },
           create: { key: "paused", value: "true" },
         });
         
-        // Update all active workers to PAUSED status
-        await prisma.generatorWorker.updateMany({
-          where: { status: { in: ["IDLE", "PROCESSING"] } },
+        // Only mark IDLE workers as PAUSED
+        // Workers that are PROCESSING will finish their current task first,
+        // then check pause status and stop picking up new tasks
+        const pausedWorkers = await prisma.generatorWorker.updateMany({
+          where: { status: "IDLE" },
           data: { status: "PAUSED" },
+        });
+        
+        // Count workers still processing
+        const processingCount = await prisma.generatorWorker.count({
+          where: { status: "PROCESSING" },
         });
         
         return NextResponse.json({
           success: true,
-          message: "Generator workers paused",
+          message: processingCount > 0 
+            ? `Paused. ${processingCount} worker(s) finishing current tasks...`
+            : "Generator workers paused",
           paused: true,
+          idlePaused: pausedWorkers.count,
+          stillProcessing: processingCount,
         });
       }
 
