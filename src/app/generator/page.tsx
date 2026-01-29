@@ -258,6 +258,7 @@ interface GeneratorConfig {
   task_timeout_ms?: number;
   paused?: boolean;
   dashboard_api_url?: string;
+  auto_stop_when_idle?: boolean;
 }
 
 interface ImapProvider {
@@ -2519,6 +2520,33 @@ export default function GeneratorPage() {
                     The VPS daemon will call this URL to send Discord webhooks. This way you can update 
                     webhook formatting from the dashboard without redeploying the daemon.
                   </p>
+                </div>
+                <Button onClick={handleSaveConfig} disabled={configSaving}>
+                  {configSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                  Save
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Daemon Behavior */}
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle>Daemon Behavior</CardTitle>
+                <CardDescription>Configure how the VPS daemon operates</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Auto-stop when idle</Label>
+                    <p className="text-xs text-muted-foreground">
+                      When enabled, daemon will automatically stop when all tasks are complete. 
+                      When disabled (default), daemon runs indefinitely until you click Stop Run.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.auto_stop_when_idle || false}
+                    onCheckedChange={(checked) => setConfig({ ...config, auto_stop_when_idle: checked })}
+                  />
                 </div>
                 <Button onClick={handleSaveConfig} disabled={configSaving}>
                   {configSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
