@@ -721,6 +721,24 @@ export default function GeneratorPage() {
     }
   };
 
+  const handleRecycleFailedToPool = async () => {
+    try {
+      const response = await fetch("/api/generator/completed-tasks", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clearAll: true, action: "recycle_to_pool" }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      toast({ title: "Recycled", description: data.message });
+      fetchCompletedTasks();
+      fetchEmails();
+      fetchStats();
+    } catch (error) {
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to recycle emails", variant: "destructive" });
+    }
+  };
+
   const toggleCompletedSelection = (taskId: string) => {
     setSelectedCompletedIds(prev => {
       const newSet = new Set(prev);
@@ -1846,9 +1864,14 @@ export default function GeneratorPage() {
                       </CardDescription>
                     </div>
                     {failedTasks.length > 0 && (
-                      <Button variant="outline" size="sm" onClick={handleClearFailedTasks}>
-                        <Trash2 className="mr-2 h-4 w-4" />Clear All
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={handleRecycleFailedToPool}>
+                          <RotateCcw className="mr-2 h-4 w-4" />Recycle to Pool
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleClearFailedTasks}>
+                          <Trash2 className="mr-2 h-4 w-4" />Clear All
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </CardHeader>

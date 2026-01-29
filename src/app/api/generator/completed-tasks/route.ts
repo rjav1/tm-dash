@@ -205,6 +205,47 @@ export async function DELETE(request: NextRequest) {
       });
     }
 
+    // Recycle failed emails back to pool
+    if (clearAll && action === "recycle_to_pool") {
+      // Get all failed task emails first
+      const failedTasks = await prisma.generatorTask.findMany({
+        where: { status: "FAILED" },
+        select: { id: true, email: true },
+      });
+
+      if (failedTasks.length === 0) {
+        return NextResponse.json({
+          success: true,
+          recycled: 0,
+          deleted: 0,
+          message: "No failed tasks to recycle",
+        });
+      }
+
+      const emails = failedTasks.map((t) => t.email);
+
+      // Set emails back to AVAILABLE in the pool
+      const emailResult = await prisma.generatorEmail.updateMany({
+        where: {
+          email: { in: emails },
+          status: { in: ["USED", "IN_USE"] },
+        },
+        data: { status: "AVAILABLE" },
+      });
+
+      // Delete the failed tasks
+      const taskResult = await prisma.generatorTask.deleteMany({
+        where: { status: "FAILED" },
+      });
+
+      return NextResponse.json({
+        success: true,
+        recycled: emailResult.count,
+        deleted: taskResult.count,
+        message: `Recycled ${emailResult.count} emails back to pool, deleted ${taskResult.count} failed tasks`,
+      });
+    }
+
     if (!taskIds || !Array.isArray(taskIds) || taskIds.length === 0) {
       return NextResponse.json(
         { error: "Task IDs are required" },
