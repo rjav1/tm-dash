@@ -848,6 +848,7 @@ model GeneratorTask {
   stepDetail   String?   @map("step_detail")    // Detailed status message
   stepProgress Int?      @map("step_progress")  // 0-100 for current step
   retryCount   Int       @default(0) @map("retry_count")
+  triedProxies String?   @map("tried_proxies")  // JSON array of proxies already tried
   lastError    String?   @map("last_error")
   durationMs   Int?      @map("duration_ms")    // Total execution time
 
