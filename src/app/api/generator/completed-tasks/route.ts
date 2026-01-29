@@ -27,6 +27,13 @@ export async function GET(request: NextRequest) {
           job: {
             select: {
               id: true,
+              tag: {
+                select: {
+                  id: true,
+                  name: true,
+                  color: true,
+                },
+              },
             },
           },
         },
@@ -51,6 +58,13 @@ export async function GET(request: NextRequest) {
           job: {
             select: {
               id: true,
+              tag: {
+                select: {
+                  id: true,
+                  name: true,
+                  color: true,
+                },
+              },
             },
           },
         },

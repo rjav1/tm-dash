@@ -285,7 +285,12 @@ interface CompletedTask {
   completedAt: string | null;
   job?: {
     id: string;
-    name: string | null;
+    name?: string | null;
+    tag?: {
+      id: string;
+      name: string;
+      color: string | null;
+    } | null;
   };
 }
 
@@ -1811,6 +1816,7 @@ export default function GeneratorPage() {
                           <TableRow>
                             <TableHead className="w-8"></TableHead>
                             <TableHead>Email</TableHead>
+                            <TableHead>Tag</TableHead>
                             <TableHead>Password</TableHead>
                             <TableHead>Completed</TableHead>
                             <TableHead></TableHead>
@@ -1826,6 +1832,22 @@ export default function GeneratorPage() {
                                 />
                               </TableCell>
                               <TableCell className="font-mono text-sm">{task.email}</TableCell>
+                              <TableCell>
+                                {task.job?.tag ? (
+                                  <Badge 
+                                    variant="outline" 
+                                    style={{ 
+                                      backgroundColor: task.job.tag.color ? `${task.job.tag.color}20` : undefined,
+                                      borderColor: task.job.tag.color || undefined,
+                                      color: task.job.tag.color || undefined,
+                                    }}
+                                  >
+                                    {task.job.tag.name}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground text-sm">-</span>
+                                )}
+                              </TableCell>
                               <TableCell className="font-mono text-sm text-muted-foreground">
                                 {task.password ? "••••••••" : "-"}
                               </TableCell>
@@ -1885,6 +1907,7 @@ export default function GeneratorPage() {
                         <TableHeader>
                           <TableRow>
                             <TableHead>Email</TableHead>
+                            <TableHead>Tag</TableHead>
                             <TableHead>Error</TableHead>
                             <TableHead>Retries</TableHead>
                             <TableHead>When</TableHead>
@@ -1894,6 +1917,22 @@ export default function GeneratorPage() {
                           {failedTasks.slice(0, 100).map((task) => (
                             <TableRow key={task.id}>
                               <TableCell className="font-mono text-sm">{task.email}</TableCell>
+                              <TableCell>
+                                {task.job?.tag ? (
+                                  <Badge 
+                                    variant="outline" 
+                                    style={{ 
+                                      backgroundColor: task.job.tag.color ? `${task.job.tag.color}20` : undefined,
+                                      borderColor: task.job.tag.color || undefined,
+                                      color: task.job.tag.color || undefined,
+                                    }}
+                                  >
+                                    {task.job.tag.name}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground text-sm">-</span>
+                                )}
+                              </TableCell>
                               <TableCell className="text-sm text-red-600 max-w-[200px] truncate" title={task.errorMessage || task.lastError || "-"}>
                                 {task.errorMessage || task.lastError || "-"}
                               </TableCell>
