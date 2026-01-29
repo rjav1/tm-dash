@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import prisma from "@/lib/db";
 
 /**
  * POST /api/checkout/webhook
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       where: { id: job_id },
       include: {
         account: { select: { email: true } },
-        card: { select: { last4: true, brand: true } },
+        card: { select: { cardNumber: true, cardType: true } },
       },
     });
 
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const configMap = Object.fromEntries(config.map((c) => [c.key, c.value]));
+    const configMap = Object.fromEntries(config.map((c: { key: string; value: string }) => [c.key, c.value]));
     const deviceName = configMap.device_name || "checkout-vps";
 
     // Determine which webhook URL to use
@@ -77,9 +77,25 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Extract card info (compute last4 from full number)
+    const cardLast4 = job.card?.cardNumber?.slice(-4) || "????";
+    const cardType = job.card?.cardType || "Card";
+
     // Build and send webhook
     const embed = buildWebhookEmbed(type, {
-      job,
+      job: {
+        id: job.id,
+        eventName: job.eventName,
+        eventDate: job.eventDate,
+        venue: job.venue,
+        section: job.section,
+        row: job.row,
+        quantity: job.quantity,
+        totalPrice: job.totalPrice ? Number(job.totalPrice) : null,
+        accountEmail: job.account?.email || null,
+        cardLast4,
+        cardType,
+      },
       finalUrl: final_url,
       errorCode: error_code,
       errorMessage: error_message,
@@ -162,14 +178,15 @@ interface WebhookJobData {
   job: {
     id: string;
     eventName: string | null;
-    eventDate: Date | null;
+    eventDate: Date | string | null;
     venue: string | null;
     section: string | null;
     row: string | null;
     quantity: number;
     totalPrice: number | null;
-    account: { email: string } | null;
-    card: { last4: string | null; brand: string | null } | null;
+    accountEmail: string | null;
+    cardLast4: string;
+    cardType: string;
   };
   finalUrl?: string;
   errorCode?: string;
@@ -189,9 +206,9 @@ function buildWebhookEmbed(type: string, data: WebhookJobData) {
   const quantity = job.quantity || 1;
   const totalPrice = job.totalPrice || 0;
   const pricePerTicket = quantity > 0 && totalPrice ? totalPrice / quantity : 0;
-  const cardLast4 = job.card?.last4 || "????";
-  const cardType = (job.card?.brand || "Card").toUpperCase();
-  const accountEmail = job.account?.email || "N/A";
+  const cardLast4 = job.cardLast4;
+  const cardType = job.cardType.toUpperCase();
+  const accountEmail = job.accountEmail || "N/A";
   const seatInfo = section !== "N/A" ? `Sec ${section} • Row ${row}` : "Best Available";
 
   if (type === "success") {

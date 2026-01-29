@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import prisma from "@/lib/db";
 
 /**
  * POST /api/generator/webhook
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const configMap = Object.fromEntries(config.map((c) => [c.key, c.value]));
+    const configMap = Object.fromEntries(config.map((c: { key: string; value: string }) => [c.key, c.value]));
     const deviceName = configMap.device_name || "generator-vps";
 
     // Determine which webhook URL to use
@@ -135,8 +135,8 @@ async function getJobStats(jobId: string): Promise<JobStats> {
   });
 
   const total = tasks.length;
-  const succeeded = tasks.filter((t) => t.status === "SUCCESS").length;
-  const failed = tasks.filter((t) => t.status === "FAILED").length;
+  const succeeded = tasks.filter((t: { status: string }) => t.status === "SUCCESS").length;
+  const failed = tasks.filter((t: { status: string }) => t.status === "FAILED").length;
   const completed = succeeded + failed;
   const successRate = completed > 0 ? (succeeded / completed) * 100 : 0;
   const progressPct = total > 0 ? (completed / total) * 100 : 0;
