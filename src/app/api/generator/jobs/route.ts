@@ -116,13 +116,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get available proxies from pool (ordered by use count for round-robin)
-    const availableProxies = await prisma.generatorProxy.findMany({
+    // Check if proxies are available (but don't pre-assign - let daemon do it from pool)
+    const availableProxyCount = await prisma.generatorProxy.count({
       where: { status: "AVAILABLE" },
-      orderBy: [
-        { useCount: "asc" },
-        { lastUsedAt: "asc" },
-      ],
     });
 
     // Validate thread count
@@ -141,22 +137,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create tasks from selected emails with round-robin proxy assignment
-    const tasks = availableEmails.map((emailRecord, index) => {
-      // Assign proxy round-robin if available
-      const proxyRecord = availableProxies.length > 0 
-        ? availableProxies[index % availableProxies.length] 
-        : null;
-
+    // Create tasks from selected emails WITHOUT pre-assigned proxies
+    // The daemon will assign proxies from the pool when claiming each task
+    // This ensures proper pool management and allows retry with different proxies
+    const tasks = availableEmails.map((emailRecord) => {
       return {
         email: emailRecord.email,
         imapSource: imapProvider,
-        proxy: proxyRecord?.proxy || null,
+        proxy: null,  // Daemon will assign from pool
         status: "PENDING",
       };
     });
 
-    // Use transaction to create job and update email/proxy statuses
+    // Use transaction to create job and update email statuses
     const job = await prisma.$transaction(async (tx) => {
       // Mark emails as IN_USE
       await tx.generatorEmail.updateMany({
@@ -164,26 +157,7 @@ export async function POST(request: NextRequest) {
         data: { status: "IN_USE" },
       });
 
-      // Update proxy use counts
-      if (availableProxies.length > 0) {
-        const proxyUseCount: Record<string, number> = {};
-        for (let i = 0; i < availableEmails.length; i++) {
-          const proxyId = availableProxies[i % availableProxies.length].id;
-          proxyUseCount[proxyId] = (proxyUseCount[proxyId] || 0) + 1;
-        }
-
-        for (const [proxyId, count] of Object.entries(proxyUseCount)) {
-          await tx.generatorProxy.update({
-            where: { id: proxyId },
-            data: {
-              useCount: { increment: count },
-              lastUsedAt: new Date(),
-            },
-          });
-        }
-      }
-
-      // Create the job with tasks
+      // Create the job with tasks (proxies assigned by daemon from pool)
       return tx.generatorJob.create({
         data: {
           status: "PENDING",
@@ -208,8 +182,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       job,
-      message: `Created job with ${tasks.length} tasks`,
-      proxiesUsed: availableProxies.length,
+      message: `Created job with ${tasks.length} tasks (proxies will be assigned from pool)`,
+      proxiesAvailable: availableProxyCount,
     });
   } catch (error) {
     console.error("Error creating generator job:", error);
