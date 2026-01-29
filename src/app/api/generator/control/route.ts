@@ -152,6 +152,27 @@ export async function POST(request: NextRequest) {
       }
 
       case "resume": {
+        // Check if there's a RUNNING run to resume
+        // Resume only works if the run is still active (just paused, not stopped)
+        const runningRun = await prisma.generatorRun.findFirst({
+          where: { status: "RUNNING" },
+        });
+        
+        // Check if there's an aborted run (user clicked Stop, not Pause)
+        const recentAbortedRun = await prisma.generatorRun.findFirst({
+          where: { status: "ABORTED" },
+          orderBy: { endedAt: "desc" },
+        });
+        
+        // If no running run exists but there's an aborted one, can't resume
+        if (!runningRun && recentAbortedRun) {
+          return NextResponse.json({
+            success: false,
+            error: "Run has been stopped. Use 'Start Run' to begin a new run.",
+            message: "Cannot resume - run was stopped, not paused",
+          }, { status: 400 });
+        }
+        
         // Clear paused flag
         await prisma.generatorConfig.upsert({
           where: { key: "paused" },
@@ -160,15 +181,18 @@ export async function POST(request: NextRequest) {
         });
         
         // Update all PAUSED workers back to IDLE
-        await prisma.generatorWorker.updateMany({
+        const resumedWorkers = await prisma.generatorWorker.updateMany({
           where: { status: "PAUSED" },
           data: { status: "IDLE" },
         });
         
         return NextResponse.json({
           success: true,
-          message: "Generator workers resumed",
+          message: resumedWorkers.count > 0 
+            ? `Resumed ${resumedWorkers.count} paused worker(s)` 
+            : "Generator unpaused (no paused workers found)",
           paused: false,
+          workersResumed: resumedWorkers.count,
         });
       }
 
