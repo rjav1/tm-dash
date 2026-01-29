@@ -257,6 +257,7 @@ interface GeneratorConfig {
   worker_parallelism?: number;
   task_timeout_ms?: number;
   paused?: boolean;
+  dashboard_api_url?: string;
 }
 
 interface ImapProvider {
@@ -2457,6 +2458,32 @@ export default function GeneratorPage() {
                 <Button onClick={handleSaveConfig} disabled={configSaving}>
                   {configSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
                   Save API Keys
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Dashboard API URL */}
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle>Dashboard API</CardTitle>
+                <CardDescription>URL for VPS daemon to send webhook notifications through the dashboard</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Dashboard API URL</Label>
+                  <Input
+                    placeholder="https://your-dashboard.vercel.app"
+                    value={config.dashboard_api_url || ""}
+                    onChange={(e) => setConfig({ ...config, dashboard_api_url: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The VPS daemon will call this URL to send Discord webhooks. This way you can update 
+                    webhook formatting from the dashboard without redeploying the daemon.
+                  </p>
+                </div>
+                <Button onClick={handleSaveConfig} disabled={configSaving}>
+                  {configSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                  Save
                 </Button>
               </CardContent>
             </Card>
